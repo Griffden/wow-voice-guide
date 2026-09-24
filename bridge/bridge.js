@@ -439,7 +439,11 @@ async function runAssistantJob(job, text) {
   publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'thinking...', transcript: job.transcript, cwd: job.cwd }, true);
   if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
   try {
-    const answer = await Providers.requestAssistant(cfg, { context: gameContext(), history: prior, text: job.text });
+    const input = { context: gameContext(), history: prior, text: job.text };
+    const research = cfg.playerGuide !== false && Providers.shouldResearchQuest(job.text, input.context);
+    if (research && process.send) process.send({ type: 'status', status: { state: 'thinking', text: 'Looking up quest guidance…' } });
+    const answer = research ? await Providers.requestPlayerGuide(cfg, input) : await Providers.requestAssistant(cfg, input);
+    if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources, quest: answer.quest });
     let speechError = '';
     let audioStarted = false;
     if (job.voice || (cfg.fish && cfg.fish.speakTyped)) {

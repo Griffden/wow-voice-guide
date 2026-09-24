@@ -970,22 +970,67 @@ function WoWClaude.GameContext()
 	end
 	if #progress > 0 then table.insert(lines, table.concat(progress, "; ")) end
 
-	-- The selected or super-tracked quest is the most useful grounding for a voice
-	-- question. Every call is capability-checked because Forever's beta API moves.
-	local questId = Try(C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID)
-	if not questId or questId == 0 then questId = Try(C_QuestLog and C_QuestLog.GetSelectedQuest) end
-	if type(questId) == "number" and questId > 0 then
-		local qname = Try(C_QuestLog and C_QuestLog.GetTitleForQuestID, questId)
-		table.insert(lines, "Active quest: " .. tostring(qname or "Unknown") .. " (id " .. questId .. ")")
+	-- Opening the quest log does not necessarily select or super-track a quest.
+	-- Send a compact list as well, so voice questions can still identify the
+	-- player's quests. Prefer an explicitly selected quest over the HUD tracker.
+	local quests, questById = {}, {}
+	local entries = Try(C_QuestLog and C_QuestLog.GetNumQuestLogEntries)
+	if type(entries) == "number" then
+		for i = 1, math.min(entries, 100) do
+			local info = Try(C_QuestLog and C_QuestLog.GetInfo, i)
+			if type(info) == "table" and not info.isHeader and not info.isHidden
+				and type(info.questID) == "number" and info.questID > 0 then
+				local title = tostring(info.title or "Unknown"):gsub("[\r\n]", " "):sub(1, 70)
+				local quest = { id = info.questID, title = title, index = i }
+				table.insert(quests, quest)
+				questById[quest.id] = quest
+			end
+		end
+	end
+	local selectedId = Try(C_QuestLog and C_QuestLog.GetSelectedQuest)
+	local trackedId = Try(C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID)
+	local questId, focusKind
+	if type(selectedId) == "number" and selectedId > 0 then
+		questId, focusKind = selectedId, "Selected"
+	elseif type(trackedId) == "number" and trackedId > 0 then
+		questId, focusKind = trackedId, "Tracked"
+	elseif #quests == 1 then
+		questId, focusKind = quests[1].id, "Only"
+	end
+	if questId then
+		local quest = questById[questId]
+		local qname = (quest and quest.title) or Try(C_QuestLog and C_QuestLog.GetTitleForQuestID, questId)
+		table.insert(lines, focusKind .. " quest: " .. tostring(qname or "Unknown") .. " (id " .. questId .. ")")
 		local objectives = Try(C_QuestLog and C_QuestLog.GetQuestObjectives, questId)
 		if type(objectives) == "table" then
 			for i = 1, math.min(#objectives, 5) do
 				local objective = objectives[i]
-				if type(objective) == "table" and objective.text then
-					table.insert(lines, "Objective: " .. tostring(objective.text) .. (objective.finished and " (complete)" or ""))
+				if type(objective) == "table" and type(objective.text) == "string" then
+					table.insert(lines, "Objective: " .. objective.text:gsub("[\r\n]", " "):sub(1, 150) .. (objective.finished and " (complete)" or ""))
 				end
 			end
 		end
+		if quest and type(GetQuestLogQuestText) == "function" then
+			local description, instructions = Try(GetQuestLogQuestText, quest.index)
+			if type(instructions) == "string" and instructions ~= "" then
+				table.insert(lines, "Quest instructions: " .. instructions:gsub("[\r\n]", " "):sub(1, 220))
+			end
+			if type(description) == "string" and description ~= "" then
+				table.insert(lines, "Quest description: " .. description:gsub("[\r\n]", " "):sub(1, 260))
+			end
+		end
+	end
+	if #quests > 0 then
+		local names, prefix = {}, "Quest log (" .. #quests .. "): "
+		local room = CONTEXT_MAX - #table.concat(lines, "\n") - #prefix - 1
+		for i = 1, math.min(#quests, 25) do
+			local quest = quests[i]
+			local entry = quest.title .. " (#" .. quest.id .. ")"
+			if #entry + (i > 1 and 2 or 0) > room then break end
+			table.insert(names, entry)
+			room = room - #entry - (i > 1 and 2 or 0)
+		end
+		if #names > 0 then table.insert(lines, prefix .. table.concat(names, "; ")) end
 	end
 
 	-- Classic-style talent tabs: name, icon, points spent.
@@ -1019,9 +1064,15 @@ function WoWClaude.GameContext()
 		if #parts > 0 then table.insert(lines, "Professions: " .. table.concat(parts, ", ")) end
 	end
 
-	local s = table.concat(lines, "\n"):gsub("[\30\31]", " ")
-	if #s > CONTEXT_MAX then s = s:sub(1, CONTEXT_MAX) end
-	return s
+	local kept, used = {}, 0
+	for _, line in ipairs(lines) do
+		line = line:gsub("[\30\31]", " ")
+		local cost = #line + (#kept > 0 and 1 or 0)
+		if used + cost > CONTEXT_MAX then break end
+		table.insert(kept, line)
+		used = used + cost
+	end
+	return table.concat(kept, "\n")
 end
 
 function WoWClaude.SetWaypoint(point)

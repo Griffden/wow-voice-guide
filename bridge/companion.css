@@ -32,3 +32,4 @@ input:focus,select:focus { border-color:var(--gold); }
 .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 #saved { margin-left:10px; color:var(--green); }
 pre { max-height:190px; overflow:auto; white-space:pre-wrap; color:#9eabc0; background:#06080c; padding:12px; border:1px solid var(--line); font:11px/1.45 Consolas,monospace; }
+.source-link { display:block; width:100%; margin:9px 0; text-align:left; overflow-wrap:anywhere; background:#172131; color:#d7e7ff; }

@@ -9,6 +9,7 @@ STUB = {
 	frames = {}, texts = {}, timers = {}, tickers = {}, prints = {}, bindings = {},
 	now = 1000, epoch = 1700000000, sounds = {}, loaded = {}, reloaded = false,
 	tooltips = {}, zone = "Duskwood", subzone = "Darkshire", level = 23, money = 12345,
+	quests = {}, selectedQuest = 0, trackedQuest = 0, questObjectives = {},
 }
 
 local function noop() end
@@ -207,9 +208,22 @@ UiMapPoint = {
 	CreateFromCoordinates = function(mapId, x, y) return { mapId = mapId, x = x, y = y } end,
 }
 C_SuperTrack = {
-	GetSuperTrackedQuestID = function() return 0 end,
+	GetSuperTrackedQuestID = function() return STUB.trackedQuest end,
 	SetSuperTrackedUserWaypoint = function(value) STUB.superTrackedWaypoint = value end,
 }
+C_QuestLog = {
+	GetNumQuestLogEntries = function() return #STUB.quests end,
+	GetInfo = function(index) return STUB.quests[index] end,
+	GetSelectedQuest = function() return STUB.selectedQuest end,
+	GetTitleForQuestID = function(id)
+		for _, quest in ipairs(STUB.quests) do if quest.questID == id then return quest.title end end
+	end,
+	GetQuestObjectives = function(id) return STUB.questObjectives[id] end,
+}
+function GetQuestLogQuestText(index)
+	local quest = STUB.quests[index] or {}
+	return quest.description, quest.instructions
+end
 function UnitXP(unit) return 1234 end
 function UnitXPMax(unit) return 5000 end
 function GetNumTalentTabs() return 3 end

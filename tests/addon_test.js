@@ -167,6 +167,29 @@ test('the game context describes the character and rides on the hello, then only
   assert.ok(vm.evaluate('WoWClaudeDB.chats[2].history[#WoWClaudeDB.chats[2].history].text').includes('Game context is ON'));
 });
 
+test('quest context includes the full log and prioritizes a selected quest over tracking', () => {
+  const vm = newVM();
+  vm.run(`
+    STUB.quests = {
+      { isHeader = true, title = "Dalaran" },
+      { questID = 94946, title = "The Magical City of Dalaran", instructions = "Take the skycutter ship.", description = "Meet the guide." },
+      { questID = 123, title = "Other Quest" },
+    }
+    STUB.selectedQuest = 94946
+    STUB.trackedQuest = 123
+    STUB.questObjectives[94946] = { { text = "Talk to Dalaran City Guide", finished = false } }
+  `);
+  const context = vm.evaluate('WoWClaude.GameContext()');
+  assert.match(context, /Selected quest: The Magical City of Dalaran \(id 94946\)/);
+  assert.match(context, /Objective: Talk to Dalaran City Guide/);
+  assert.match(context, /Quest instructions: Take the skycutter ship/);
+  assert.match(context, /Quest log \(2\): The Magical City of Dalaran \(#94946\); Other Quest \(#123\)/);
+  vm.run('STUB.selectedQuest = 0; STUB.trackedQuest = 0');
+  assert.doesNotMatch(vm.evaluate('WoWClaude.GameContext()'), /(?:Selected|Tracked|Only) quest:/);
+  vm.run('STUB.quests[3] = nil');
+  assert.match(vm.evaluate('WoWClaude.GameContext()'), /Only quest: The Magical City of Dalaran/);
+});
+
 test('a shift-clicked link lands in the focused input and is sent as its name plus tooltip', () => {
   const vm = newVM();
   login(vm);

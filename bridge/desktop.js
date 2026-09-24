@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { fork } = require('child_process');
@@ -197,6 +197,7 @@ function onBridgeMessage(message) {
       ui('status', { state: 'speaking', text: 'Speaking…' });
     } catch (e) { log(`audio playback file failed: ${e.message}`); }
   } else if (message.type === 'status') ui('status', message.status);
+  else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources, quest: message.quest });
 }
 
 function createWindow() {
@@ -237,6 +238,12 @@ ipcMain.on('capture:force-end', () => {
 });
 ipcMain.on('capture:cancel', () => closeFlux('Listening cancelled.', true));
 ipcMain.on('audio:ended', () => ui('status', { state: 'idle', text: 'Ready' }));
+ipcMain.on('guide:open-source', (_event, value) => {
+  try {
+    const url = new URL(String(value));
+    if (url.protocol === 'https:' && !url.username && !url.password) shell.openExternal(url.href);
+  } catch {}
+});
 
 if (!hasSingleInstanceLock) {
   app.quit();

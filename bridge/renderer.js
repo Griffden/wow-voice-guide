@@ -113,6 +113,27 @@ $('cancel').addEventListener('click', () => window.wowVoice.cancel());
 window.wowVoice.on('capture:start', startCapture);
 window.wowVoice.on('capture:stop', stopCapture);
 window.wowVoice.on('status', setStatus);
+window.wowVoice.on('guide:sources', value => {
+  const box = $('sourceLinks');
+  box.replaceChildren();
+  for (const source of (value.sources || []).slice(0, 3)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'source-link';
+    button.textContent = `${source.title} — ${source.url}`;
+    button.addEventListener('click', () => window.wowVoice.openGuideSource(source.url));
+    box.append(button);
+  }
+  if (value.quest && Number.isInteger(value.quest.id)) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'source-link';
+    button.textContent = `Wowhead quest page (not searched directly) — #${value.quest.id}`;
+    button.addEventListener('click', () => window.wowVoice.openGuideSource(`https://www.wowhead.com/forever/quest=${value.quest.id}`));
+    box.append(button);
+  }
+  $('guideSources').hidden = box.childElementCount === 0;
+});
 window.wowVoice.on('audio:volume', value => setVoiceVolume(value && value.volumePercent));
 window.wowVoice.on('log', line => {
   const log = $('log');

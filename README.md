@@ -37,7 +37,7 @@ The settings screen also includes:
 - **Gemma 4 31B** through the Gemini API — dense and potentially heavier/slower.
 - **Local / other OpenAI-compatible** — LM Studio, llama.cpp, vLLM, or another hosted Chat Completions endpoint.
 
-The model is the conversational brain, not the source of truth. The add-on grounds it with character, location, coordinates, selected/super-tracked quest, and current objectives where Forever exposes those APIs. Exact destination waypoints are accepted only as structured data and still require the player to click **Set waypoint**. For a production-quality quest oracle, the next layer should be a licensed/version-matched quest database or retrieval service; model memory alone cannot guarantee exact Forever beta coordinates.
+The model is the conversational brain, not the source of truth. The add-on sends character, location, coordinates, a compact quest log, and selected/super-tracked quest objectives where Forever exposes those APIs. Quest-help questions trigger an OpenAI web-index search using the same OpenAI key as the brain preset. The answer shows source URLs in game and clickable source buttons in the desktop companion. A matching Wowhead Forever quest-page link is offered when the quest ID is known, but the app does **not** scrape Wowhead or claim it read that page. Search results can be stale or from another WoW edition; verify uncertain directions. Exact destination waypoints are accepted only as structured data and still require the player to click **Set waypoint**. For a production-quality quest oracle, a licensed/version-matched quest database remains the next step.
 
 ## Requirements
 

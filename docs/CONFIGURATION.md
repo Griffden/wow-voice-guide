@@ -45,6 +45,14 @@ The app streams raw mono signed 16-bit PCM at 16 kHz in roughly 80–85 ms brows
 
 The local preset uses `http://127.0.0.1:1234/v1/chat/completions`, which matches LM Studio's common default. Change the URL/model for llama.cpp, vLLM, Ollama compatibility layers, or another host.
 
+### Player guide web lookup
+
+When a question asks for quest help, location, or a web guide, the companion uses OpenAI's Responses API web search with the existing OpenAI key. It searches the provider's index/cache, not live Wowhead pages. The companion shows clickable cited sources; the in-game answer includes their URLs and a direct Wowhead Forever quest-page link when the focused quest has an ID. That link is **not** evidence the page was searched. Ordinary conversation does not trigger search. Searches may add usage charges and latency.
+
+This first version requires the OpenAI brain endpoint and key; other brain presets still answer normal questions but quest web lookup will explain the missing OpenAI configuration. Set `"playerGuide": false` in local config to disable automatic search. `playerGuide.model` defaults to `gpt-6-luna`; `playerGuide.timeoutMs` defaults to `60000`.
+
+The add-on sends a compact list of up to 25 visible quests plus objectives and instructions for the selected or tracked quest. It does not read the rendered screen. If several quests are open and none is selected or tracked, name or shift-click the quest when asking which one you mean.
+
 ### Hosted Gemma 4
 
 Set `provider` to `gemini` and choose `gemma-4-26b-a4b-it` or `gemma-4-31b-it`. `llm.thinkingLevel` defaults to `minimal`. The endpoint is the native Gemini `generateContent` API, not an OpenAI compatibility shim.

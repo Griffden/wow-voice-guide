@@ -41,6 +41,10 @@
     "maxTokens": 500,
     "timeoutMs": 45000
   },
+  "playerGuide": {
+    "model": "gpt-6-luna",
+    "timeoutMs": 60000
+  },
   "fish": {
     "apiKey": "",
     "voiceId": "06c4b6c98f8a451cad28734427faaa9d",
