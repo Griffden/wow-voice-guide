@@ -2,9 +2,26 @@
 
 [▶ Watch or download the WoW Voice Guide demo](https://github.com/Griffden/wow-voice-guide/raw/refs/heads/main/demo/wow-voice-guide-demo.mp4)
 
-Press **Talk** once inside World of Warcraft: Forever, speak naturally, stop speaking, and hear the answer in a selected Fish Audio voice. The transcript and answer also appear in the in-game window.
+**A voice-first player guide for World of Warcraft: Forever.** Press **Talk** (or your bound key) once, ask a question, stop speaking, and hear the answer in a selected Fish Audio voice. Your transcript and the answer also appear in game. You do not need to say “Forever” in every question: the guide treats WoW questions as being about **WoW: Forever** unless you explicitly ask about another version.
 
 This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chelinho139/wow-claude). It retains the original project's game-to-desktop transport and replaces the Claude Code agent with a voice guide powered by your own Deepgram, model-provider, and Fish Audio accounts.
+
+## What it can do today
+
+| Capability | What you can do |
+|---|---|
+| Hands-free questions | Press the in-game **Talk** button, `/voice`, or a keybind; Deepgram Flux detects when you finish talking. The companion's **Finish now** and **Cancel listening** buttons are fallbacks. |
+| Spoken character voices | Hear replies through Fish Audio. The example Peon voice is preselected; enter another Fish Voice Library model ID to change it. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
+| Character-aware answers | Ask about your current character, level, class, faction, zone, subzone, map position, money, XP, talents, and professions when the Forever client exposes those fields. View or disable what is shared with `/wow-claude context`. |
+| Quest help | The add-on sends a compact list of visible quests (up to 25) and, when one is selected or tracked, its objectives and available instructions. Ask where to go, what an objective means, or what to do next. |
+| Sourced game lookup | With an OpenAI key and preset, quest and other game-fact questions can trigger indexed web search. The answer includes cited URLs in game and clickable source buttons in the companion. If its cited pages do not clearly match Forever and the subject, the guide withholds the route rather than presenting another edition's answer as fact. |
+| Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
+| Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
+| In-game chat and follow-ups | Type in the window or use `/ai <question>`; `/r` replies to the guide when it was the last messenger. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
+
+Try: “Where do I go for my tracked quest?”, “What does this objective mean?”, “What level am I and what quests do I have?”, or “Where can I find Bolvar Fordragon in WoW?” For a specific item or quest, shift-click its link into the guide input before asking.
+
+The guide does **not** see the whole game screen, read every open panel, control movement/combat, or have an authoritative Forever quest database. The desktop companion captures only the add-on's encoded pixel strip to receive messages; screen understanding is not implemented. Search uses cached/indexed web results, which may be incomplete for the new beta. A direct Wowhead Forever quest link is a convenience link, not proof that the page was read.
 
 ## What runs
 
@@ -26,18 +43,16 @@ in-game Talk button
 
 WoW add-ons cannot use the network or microphone. That sandbox is why the companion is necessary. Nothing injects into the game, reads game memory, moves the character, or generates player input.
 
-## Brain recommendation
+## Models and WoW: Forever accuracy
 
-The shipped default is **GPT-6 Luna with reasoning disabled**. It is the best starting point for this particular job: short, focused answers, structured output, low model cost, and no unnecessary deliberation before speech.
-
-The settings screen also includes:
+The shipped default brain preset is **GPT-6 Luna with reasoning disabled**. Other presets are available in companion Settings:
 
 - **GPT-4.1 Mini** — a low-latency fallback with strong instruction following.
 - **Gemma 4 26B A4B** through the Gemini API — the Gemma preset I would try first; the mixture-of-experts model is the better latency/quality shape for this use.
 - **Gemma 4 31B** through the Gemini API — dense and potentially heavier/slower.
 - **Local / other OpenAI-compatible** — LM Studio, llama.cpp, vLLM, or another hosted Chat Completions endpoint.
 
-The model is the conversational brain, not the source of truth. The add-on sends character, location, coordinates, a compact quest log, and selected/super-tracked quest objectives where Forever exposes those APIs. Quest-help questions trigger an OpenAI web-index search using the same OpenAI key as the brain preset. The answer shows source URLs in game and clickable source buttons in the desktop companion. A matching Wowhead Forever quest-page link is offered when the quest ID is known, but the app does **not** scrape Wowhead or claim it read that page. Search results can be stale or from another WoW edition; verify uncertain directions. Exact destination waypoints are accepted only as structured data and still require the player to click **Set waypoint**. For a production-quality quest oracle, a licensed/version-matched quest database remains the next step.
+Both the normal-answer and web-lookup prompts default to **World of Warcraft: Forever**, even when you just say “WoW.” They prioritize the client-supplied quest ID/objectives and linked tooltips, and instruct the model not to silently substitute Retail or Classic facts. A prompt cannot guarantee accuracy: if a Forever-specific answer cannot be verified, the guide should say what is unknown. Do not treat an uncited NPC route or exact waypoint as confirmed. A licensed, version-matched quest database would improve this further.
 
 ## Requirements
 
@@ -49,28 +64,52 @@ The model is the conversational brain, not the source of truth. The add-on sends
 
 The example configuration preselects the public [Warcraft 3 Peon voice on Fish Audio](https://fish.audio/m/06c4b6c98f8a451cad28734427faaa9d/). It is a voice choice, not an API credential. You can replace its `reference_id` in the companion. Community voices can be renamed, removed, or subject to usage restrictions; check the voice page and Fish terms before distributing generated audio.
 
-## Install from source
+## Install from source (Windows)
 
-```powershell
-git clone https://github.com/Griffden/wow-voice-guide.git
-cd wow-voice-guide
-npm install
-node setup.js --wow "C:\path\to\World of Warcraft\_classic_beta_"
-npm start
-```
+You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcription, a Fish Audio key for speech, and a brain-provider key (OpenAI or Google) unless you run a local compatible model. **Automatic web lookup currently requires an OpenAI preset and key**; Google/local presets can still answer ordinary questions. Each provider uses your own account and may charge for usage. The example Fish voice ID is public and is not an API key.
 
-`setup.js` locates the WoW account, copies the add-on, writes `bridge/config.json`, and creates the pre-registered reply slots. Fully quit and relaunch WoW after setup; `/reload` is not sufficient for discovering newly created add-ons.
+1. Fully close WoW, open PowerShell, and clone/install the project:
 
-In the companion settings:
+   ```powershell
+   git clone https://github.com/Griffden/wow-voice-guide.git
+   cd wow-voice-guide
+   npm install
+   node setup.js
+   ```
 
-1. Paste the Deepgram API key.
-2. Choose a brain preset and paste its key, or configure a local endpoint.
-3. Paste the Fish Audio API key. The Peon voice is preselected; replace its model ID if you want another voice.
-4. Save. The bridge restarts automatically.
+   If setup cannot find your beta client, run `node setup.js --wow "C:\path\to\World of Warcraft\_classic_beta_"`. If it finds the wrong WoW account, pass `--account NAME`. Setup copies the add-on, creates your local `bridge/config.json`, and pre-creates the numbered reply slots. Re-running setup keeps your existing keys/config.
 
-In game, enable **WoW Voice Guide**, type `/voice-guide`, then press **Talk**. You can also bind a key in the game's Key Bindings menu or use `/wow-claude bind F8` (replace `F8` with your preferred key); pressing it starts listening without opening the window. The standalone `/voice` command starts listening immediately. The companion's **Finish now** control forces the current turn to end; **Cancel listening** abandons it. The in-game **Voice volume** slider ranges from 0–200%; `/wow-claude volume 150` sets the same value directly. Values above 100% use companion-side amplification with clipping protection.
+2. Relaunch WoW in **windowed or borderless** mode. At character select, enable **WoW Voice Guide** and leave the numbered `WoWClaude_S###` slot add-ons enabled. A full client restart is needed to discover newly created add-on folders; `/reload` alone is not enough.
 
-Typed chat remains available as a fallback. Fish only speaks voice-originated questions by default; set `fish.speakTyped` to `true` in `bridge/config.json` to speak typed answers too.
+3. Start the desktop companion from the project folder and leave it running while you play:
+
+   ```powershell
+   npm start
+   ```
+
+4. In companion **Settings**, enter your Deepgram API key, select a brain preset and enter that provider's key (OpenAI if you want web lookup), and enter your Fish Audio API key. The example Peon voice is already selected; paste a different Fish voice model ID if you prefer. Click **Save and restart bridge**. Windows may ask for microphone permission on your first Talk request.
+
+5. In game, use `/voice-guide` to open the window and press **Talk**. Speak, then pause; the answer should appear in game and play through Fish. Bind a key in WoW's Key Bindings menu or run `/wow-claude bind F8` (replace `F8` with your preferred key) to ask without reopening the window. `/voice` also starts listening immediately.
+
+For first-run problems, account selection, microphone permissions, and transport diagnostics, see the [detailed Windows guide](docs/INSTALL-WINDOWS.md). Do not commit `bridge/config.json`; it contains your keys and is gitignored.
+
+Typed chat remains available as a fallback. Fish only speaks voice-originated questions by default; set `fish.speakTyped` to `true` in `bridge/config.json` to speak typed answers too. The in-game **Voice volume** slider ranges from 0–200%; values above 100% use companion-side amplification with clipping protection.
+
+### Useful in-game commands
+
+| Command | Use |
+|---|---|
+| `/voice` | Start one voice question without opening the guide window. |
+| `/voice-guide` | Show or hide the guide window. |
+| `/ai <question>` | Send a typed question from the regular game chat box. |
+| `/r <reply>` | Reply to the guide when it was the last messenger; otherwise WoW's normal whisper reply. |
+| `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
+| `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
+| `/wow-claude volume 150` | Set spoken-reply volume (0–200). |
+| `/wow-claude new`, `chat`, `clear`, `copy` | Manage conversations and copy the last answer. |
+| `/wow-claude diag`, `slots`, `reload` | Diagnose transport or free used reply slots. |
+
+`/wow-claude help` lists every command. The `WoWClaude` name is retained internally for compatibility with the original transport.
 
 ## Important configuration
 

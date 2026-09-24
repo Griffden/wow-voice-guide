@@ -21,6 +21,9 @@ test('buildMessages supplies game context, bounded history and the current quest
   assert.equal(messages.length, 14);
   assert.equal(messages[1].content, 'm8');
   assert.deepEqual(messages.at(-1), { role: 'user', content: 'Where now?' });
+  assert.match(messages[0].content, /World of Warcraft: Forever/);
+  assert.match(messages[0].content, /Do not silently substitute facts from Retail, Classic/);
+  assert.match(messages[0].content, /earlier assistant replies as potentially mistaken/);
 });
 
 test('redact removes configured provider secrets', () => {
@@ -75,7 +78,11 @@ test('Fish request uses the configured reference voice and returns WAV bytes', a
 test('quest lookup routes only research questions and returns cited guidance', async () => {
   const context = 'Selected quest: The Magical City of Dalaran (id 94946)\nObjective: Board the skycutter';
   assert.equal(Providers.shouldResearchQuest('Where do I go?', context), true);
-  assert.equal(Providers.shouldResearchQuest('What quest am I on?', context), true);
+  assert.equal(Providers.shouldResearchQuest('What quest am I on?', context), false);
+  assert.equal(Providers.shouldResearchQuest('Where can I find Bolvar Fordragon in WoW?', ''), true);
+  assert.equal(Providers.shouldResearchQuest('No, this is for the new WoW Forever quest', ''), true);
+  assert.equal(Providers.shouldResearchQuest('Exploring the Alliance', 'Quest log (1): Exploring the Alliance (#94946)'), true);
+  assert.equal(Providers.shouldResearchQuest('What level am I?', context), false);
   assert.equal(Providers.shouldResearchQuest('Tell me a joke', context), false);
   assert.equal(Providers.shouldResearchQuest('How do I finish this quest?', ''), true);
   const originalFetch = global.fetch;
@@ -85,19 +92,66 @@ test('quest lookup routes only research questions and returns cited guidance', a
     return new Response(JSON.stringify({ output: [
       { type: 'web_search_call' },
       { type: 'message', content: [{ type: 'output_text', text: 'Board the ship near the dock. citeturn1search0', annotations: [
-        { type: 'url_citation', title: 'Quest notes', url: 'https://example.com/quest' },
+        { type: 'url_citation', title: 'WoW Forever quest notes', url: 'https://example.com/forever/quest=94946' },
       ] }] },
     ] }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   try {
-    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, { context, text: 'Where do I go?' });
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, { context, text: 'Where do I go?', history: [
+      { role: 'user', text: 'I am doing the Forever Dalaran quest' },
+      { role: 'claude', text: 'A previous mistaken NPC location' },
+    ] });
     assert.equal(request.url, 'https://api.openai.com/v1/responses');
     assert.deepEqual(request.body.tools, [{ type: 'web_search', external_web_access: false }]);
     assert.equal(request.body.tool_choice, 'required');
+    assert.match(request.body.instructions, /World of Warcraft: Forever/);
+    assert.match(request.body.instructions, /do not recycle those steps/);
+    assert.match(request.body.input, /I am doing the Forever Dalaran quest/);
+    assert.doesNotMatch(request.body.input, /A previous mistaken NPC location/);
     assert.equal(answer.speech, 'Board the ship near the dock.');
-    assert.match(answer.display, /https:\/\/example\.com\/quest/);
+    assert.match(answer.display, /https:\/\/example\.com\/forever\/quest=94946/);
     assert.match(answer.display, /wowhead\.com\/forever\/quest=94946/);
-    assert.deepEqual(answer.sources, [{ title: 'Quest notes', url: 'https://example.com/quest' }]);
+    assert.deepEqual(answer.sources, [{ title: 'WoW Forever quest notes', url: 'https://example.com/forever/quest=94946' }]);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('guide withholds an answer backed only by an unrelated or wrong-edition citation', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'Bolvar is in the Keep.', annotations: [
+      { type: 'url_citation', title: 'Blackrock Depths', url: 'https://example.com/classic/blackrock-depths' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'Where can I find Bolvar Fordragon in WoW?',
+    });
+    assert.match(answer.speech, /couldn't verify a source/);
+    assert.doesNotMatch(answer.speech, /in the Keep/);
+    assert.deepEqual(answer.sources, []);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('an explicitly requested different edition is not treated as Forever', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async (_url, init) => {
+    const body = JSON.parse(init.body);
+    assert.doesNotMatch(body.input, /Focused quest:/);
+    return new Response(JSON.stringify({ output: [
+      { type: 'web_search_call' },
+      { type: 'message', content: [{ type: 'output_text', text: 'Classic-specific answer.', annotations: [
+        { type: 'url_citation', title: 'Bolvar in WoW Classic', url: 'https://example.com/classic/bolvar' },
+      ] }] },
+    ] }), { status: 200 });
+  };
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Selected quest: Forever quest (id 94946)', text: 'Where is Bolvar in WoW Classic?',
+    });
+    assert.equal(answer.speech, 'Classic-specific answer.');
+    assert.equal(answer.sources.length, 1);
+    assert.doesNotMatch(answer.display, /wowhead\.com\/forever/);
   } finally { global.fetch = originalFetch; }
 });
 
