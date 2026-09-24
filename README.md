@@ -1,5 +1,7 @@
 # WoW Voice Guide
 
+[▶ Watch the WoW Voice Guide demo](demo/wow-voice-guide-demo.mp4)
+
 Press **Talk** once inside World of Warcraft: Forever, speak naturally, stop speaking, and hear the answer in a selected Fish Audio voice. The transcript and answer also appear in the in-game window.
 
 This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chelinho139/wow-claude). It retains the original project's game-to-desktop transport and replaces the Claude Code agent with a voice guide powered by your own Deepgram, model-provider, and Fish Audio accounts.
