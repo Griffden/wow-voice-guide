@@ -63,7 +63,7 @@ Set `provider` to `gemini` and choose `gemma-4-26b-a4b-it` or `gemma-4-31b-it`. 
 
 | Field | Default | Meaning |
 |---|---|---|
-| `fish.voiceId` | `06c4b6c98f8a451cad28734427faaa9d` | Example Warcraft 3 Peon voice on Fish; replace with another permitted public/owned voice model `_id` |
+| `fish.voiceId` | `06c4b6c98f8a451cad28734427faaa9d` | Selected Fish voice model `_id`; use the companion preset menu or paste a custom ID |
 | `fish.model` | `s2.1-pro-free` | Use `s2.1-pro` for the paid production model |
 | `fish.latency` | `balanced` | `normal`, `balanced`, or `low` |
 | `fish.speed` | `1` | Voice speed |
@@ -71,7 +71,9 @@ Set `provider` to `gemini` and choose `gemma-4-26b-a4b-it` or `gemma-4-31b-it`. 
 | `fish.speakTyped` | `false` | Also synthesize typed questions' answers |
 | `fish.timeoutMs` | `60000` | Synthesis timeout |
 
-Output is 44.1 kHz mono WAV. A voice model may be public without being licensed for every use; check the model page and Fish account terms before distribution.
+The companion's built-in voice choices are Peon (`06c4b6c98f8a451cad28734427faaa9d`), Furbolg (`fa4d72bfeee64c029970e09aeb67c43e`), Knight (`b31185cef9d54e908c58dfe901e9598b`), and Asmongold (`fb029f2d4c6c4405bd5b476b536519ae`). Choosing one fills the same editable `fish.voiceId` field; an existing custom ID stays intact and appears as **Custom model ID**. Peon remains the fresh-install default. Fish's model API reported the three new models as public and trained, but `licensed: false` at the time of addition. Public visibility does not establish permission to publish generated audio or imply an endorsement.
+
+Output is 44.1 kHz mono WAV. Check the model page and Fish account terms before distribution.
 
 ### Playback volume
 

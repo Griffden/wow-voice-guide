@@ -11,7 +11,7 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Capability | What you can do |
 |---|---|
 | Hands-free questions | Press the in-game **Talk** button, `/voice`, or a keybind; Deepgram Flux detects when you finish talking. The companion's **Finish now** and **Cancel listening** buttons are fallbacks. |
-| Spoken character voices | Hear replies through Fish Audio. The example Peon voice is preselected; enter another Fish Voice Library model ID to change it. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
+| Spoken character voices | Hear replies through Fish Audio. Pick Peon, Furbolg, Knight, or Asmongold in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
 | Character-aware answers | Ask about your current character, level, class, faction, zone, subzone, map position, money, XP, talents, and professions when the Forever client exposes those fields. View or disable what is shared with `/wow-claude context`. |
 | Quest help | The add-on sends a compact list of visible quests (up to 25) and, when one is selected or tracked, its objectives and available instructions. Ask where to go, what an objective means, or what to do next. |
 | Sourced game lookup | With an OpenAI key and preset, quest and other game-fact questions can trigger indexed web search. The answer includes cited URLs in game and clickable source buttons in the companion. If its cited pages do not clearly match Forever and the subject, the guide withholds the route rather than presenting another edition's answer as fact. |
@@ -60,9 +60,9 @@ Both the normal-answer and web-lookup prompts default to **World of Warcraft: Fo
 - Node.js 22.12 or newer
 - API keys for Deepgram and Fish Audio
 - One brain-provider key: OpenAI or Google, unless using a local OpenAI-compatible server
-- A Fish Audio voice model ID if you want to change the bundled example voice
+- A Fish Audio voice model ID only if you want a voice outside the built-in choices
 
-The example configuration preselects the public [Warcraft 3 Peon voice on Fish Audio](https://fish.audio/m/06c4b6c98f8a451cad28734427faaa9d/). It is a voice choice, not an API credential. You can replace its `reference_id` in the companion. Community voices can be renamed, removed, or subject to usage restrictions; check the voice page and Fish terms before distributing generated audio.
+The example configuration still preselects [Warcraft 3 Peon](https://fish.audio/m/06c4b6c98f8a451cad28734427faaa9d/). The companion also offers [Furbolg (Warcraft 3 ENG)](https://fish.audio/m/fa4d72bfeee64c029970e09aeb67c43e/), [Warcraft 3 Knight](https://fish.audio/m/b31185cef9d54e908c58dfe901e9598b/), and [Asmongold](https://fish.audio/m/fb029f2d4c6c4405bd5b476b536519ae/). These are public Fish model IDs, not API credentials or official endorsements. Fish currently marks the three added models `licensed: false`; confirm your rights to use a voice before publishing generated audio. Community models can also be renamed or removed.
 
 ## Install from source (Windows)
 
@@ -87,7 +87,7 @@ You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcripti
    npm start
    ```
 
-4. In companion **Settings**, enter your Deepgram API key, select a brain preset and enter that provider's key (OpenAI if you want web lookup), and enter your Fish Audio API key. The example Peon voice is already selected; paste a different Fish voice model ID if you prefer. Click **Save and restart bridge**. Windows may ask for microphone permission on your first Talk request.
+4. In companion **Settings**, enter your Deepgram API key, select a brain preset and enter that provider's key (OpenAI if you want web lookup), and enter your Fish Audio API key. Choose one of the four built-in Fish voices or paste a custom model ID. Peon remains the initial choice. Click **Save and restart bridge**. Windows may ask for microphone permission on your first Talk request.
 
 5. In game, use `/voice-guide` to open the window and press **Talk**. Speak, then pause; the answer should appear in game and play through Fish. Bind a key in WoW's Key Bindings menu or run `/wow-claude bind F8` (replace `F8` with your preferred key) to ask without reopening the window. `/voice` also starts listening immediately.
 

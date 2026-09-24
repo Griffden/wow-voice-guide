@@ -16,6 +16,32 @@ const presets = {
   local: { provider: 'openai-compatible', endpoint: 'http://127.0.0.1:1234/v1/chat/completions', model: '', reasoningEffort: '' },
 };
 
+const fishVoicePresets = window.WowVoicePresets;
+for (const voice of fishVoicePresets.voices) {
+  const option = document.createElement('option');
+  option.value = voice.id;
+  option.textContent = voice.name;
+  $('fishVoicePreset').append(option);
+}
+const customVoiceOption = document.createElement('option');
+customVoiceOption.value = 'custom';
+customVoiceOption.textContent = 'Custom model ID';
+$('fishVoicePreset').append(customVoiceOption);
+
+function syncFishVoicePreset() {
+  const matched = fishVoicePresets.presetForVoiceId($('fishVoice').value);
+  $('fishVoicePreset').value = matched ? matched.id : 'custom';
+}
+
+$('fishVoicePreset').addEventListener('change', event => {
+  if (event.target.value === 'custom') {
+    $('fishVoice').focus();
+    $('fishVoice').select();
+  }
+  else $('fishVoice').value = event.target.value;
+});
+$('fishVoice').addEventListener('input', syncFishVoicePreset);
+
 function setStatus(value) {
   const status = value || { state: 'idle', text: 'Ready' };
   $('state').dataset.state = status.state || 'idle';
@@ -79,6 +105,7 @@ function applyConfig(config) {
   $('eotThreshold').value = dg.eotThreshold || 0.7;
   $('fishKey').value = fish.apiKey || '';
   $('fishVoice').value = fish.voiceId || '';
+  syncFishVoicePreset();
   $('fishModel').value = fish.model || 's2.1-pro-free';
   $('fishLatency').value = fish.latency || 'balanced';
   $('llmKey').value = llm.apiKey || '';

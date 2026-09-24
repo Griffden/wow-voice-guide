@@ -2,7 +2,7 @@
 
 ## 1. Prepare accounts
 
-Create API keys for [Deepgram](https://console.deepgram.com/) and [Fish Audio](https://fish.audio/). The example configuration includes a public Warcraft 3 Peon voice; copy the `_id` of another Fish public-library or owned voice model if you prefer a different voice. Also prepare either an OpenAI API key, a Google AI Studio key for Gemma 4, or a running local OpenAI-compatible server.
+Create API keys for [Deepgram](https://console.deepgram.com/) and [Fish Audio](https://fish.audio/). The companion includes four selectable Fish voice IDs (Peon, Furbolg, Knight, and Asmongold) and also accepts a custom Fish public-library or owned voice model ID. Peon is the fresh-install default. Also prepare either an OpenAI API key, a Google AI Studio key for Gemma 4, or a running local OpenAI-compatible server.
 
 ## 2. Install the source build
 
@@ -39,7 +39,7 @@ Windows will ask for microphone permission the first time a Talk request reaches
 
 - Deepgram API key
 - Brain preset and API key or local endpoint
-- Fish Audio API key (the example Peon voice is preselected; its model ID is editable)
+- Fish Audio API key and a built-in or custom voice (Peon is preselected; its model ID is editable)
 
 Click **Save and restart bridge**.
 

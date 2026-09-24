@@ -65,7 +65,9 @@
         <fieldset>
           <legend>Voice · Fish Audio</legend>
           <label>API key<input id="fishKey" type="password" autocomplete="off" placeholder="Fish Audio API key"></label>
-          <label>Fish voice model ID<input id="fishVoice" placeholder="Paste a Voice Library model ID"></label>
+          <label>Built-in voice<select id="fishVoicePreset"></select></label>
+          <label>Fish voice model ID<input id="fishVoice" placeholder="Select a voice above or paste another model ID"></label>
+          <p class="voice-note">These are community Fish models, not official or endorsed voices. Check each model's usage rights before publishing audio.</p>
           <div class="grid">
             <label>TTS model<select id="fishModel"><option>s2.1-pro-free</option><option>s2.1-pro</option></select></label>
             <label>Latency<select id="fishLatency"><option>balanced</option><option>normal</option><option>low</option></select></label>
@@ -82,6 +84,7 @@
     </details>
   </main>
   <script src="audio-utils.js"></script>
+  <script src="voice-presets.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
