@@ -45,6 +45,11 @@ function Methods.IsShown(self) return self.shown end
 function Methods.IsVisible(self) return self.shown end
 function Methods.SetText(self, t) self.text = t; table.insert(STUB.texts, tostring(t)) end
 function Methods.GetText(self) return self.text or "" end
+function Methods.SetValue(self, value)
+	self.value = value
+	if self.scripts.OnValueChanged then self.scripts.OnValueChanged(self, value) end
+end
+function Methods.GetValue(self) return self.value or 0 end
 function Methods.GetName(self) return self.name end
 function Methods.GetParent(self) return self.parent end
 function Methods.GetWidth(self) return self.width or 400 end
@@ -196,6 +201,14 @@ C_Map = {
 	GetBestMapForUnit = function(unit) return 1431 end,
 	GetPlayerMapPosition = function(mapId, unit) return { x = STUB.posX or 0.452, y = STUB.posY or 0.678 } end,
 	GetMapInfo = function(mapId) return { name = "Duskwood", mapID = mapId } end,
+	SetUserWaypoint = function(point) STUB.waypoint = point end,
+}
+UiMapPoint = {
+	CreateFromCoordinates = function(mapId, x, y) return { mapId = mapId, x = x, y = y } end,
+}
+C_SuperTrack = {
+	GetSuperTrackedQuestID = function() return 0 end,
+	SetSuperTrackedUserWaypoint = function(value) STUB.superTrackedWaypoint = value end,
 }
 function UnitXP(unit) return 1234 end
 function UnitXPMax(unit) return 5000 end

@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WoW Voice Guide</title>
+  <link rel="stylesheet" href="companion.css">
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <p class="eyebrow">WORLD OF WARCRAFT: FOREVER</p>
+        <h1>Voice Guide</h1>
+      </div>
+      <div id="state" data-state="idle"><span></span><strong>Starting…</strong></div>
+    </header>
+
+    <section class="hero">
+      <div class="rune">V</div>
+      <div>
+        <h2 id="statusText">Preparing the companion…</h2>
+        <p>Press <b>Talk</b> in game, speak normally, and stop. Flux detects the end of your turn; Fish speaks the answer.</p>
+      </div>
+    </section>
+
+    <div class="controls">
+      <button id="forceEnd" class="secondary" disabled>Finish now</button>
+      <button id="cancel" class="danger" disabled>Cancel listening</button>
+    </div>
+
+    <details open>
+      <summary>Settings</summary>
+      <form id="settings">
+        <fieldset>
+          <legend>Transcription · Deepgram Flux</legend>
+          <label>API key<input id="deepgramKey" type="password" autocomplete="off" placeholder="Deepgram API key"></label>
+          <div class="grid">
+            <label>Model<input id="deepgramModel" value="flux-general-en"></label>
+            <label>End-of-turn threshold<input id="eotThreshold" type="number" min="0.5" max="1" step="0.05" value="0.7"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Brain</legend>
+          <label>Preset
+            <select id="llmPreset">
+              <option value="luna">GPT-6 Luna · recommended</option>
+              <option value="gpt41mini">GPT-4.1 Mini</option>
+              <option value="gemma26">Gemma 4 26B A4B · hosted free tier</option>
+              <option value="gemma31">Gemma 4 31B · hosted free tier</option>
+              <option value="local">Local / other OpenAI-compatible</option>
+            </select>
+          </label>
+          <label>API key<input id="llmKey" type="password" autocomplete="off" placeholder="Provider API key"></label>
+          <label>Endpoint<input id="llmEndpoint" placeholder="https://api.openai.com/v1/chat/completions"></label>
+          <label>Model<input id="llmModel" placeholder="gpt-6-luna"></label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Voice · Fish Audio</legend>
+          <label>API key<input id="fishKey" type="password" autocomplete="off" placeholder="Fish Audio API key"></label>
+          <label>Fish voice model ID<input id="fishVoice" placeholder="Paste a Voice Library model ID"></label>
+          <div class="grid">
+            <label>TTS model<select id="fishModel"><option>s2.1-pro-free</option><option>s2.1-pro</option></select></label>
+            <label>Latency<select id="fishLatency"><option>balanced</option><option>normal</option><option>low</option></select></label>
+          </div>
+        </fieldset>
+        <button type="submit" class="primary">Save and restart bridge</button>
+        <span id="saved"></span>
+      </form>
+    </details>
+
+    <details>
+      <summary>Bridge log</summary>
+      <pre id="log"></pre>
+    </details>
+  </main>
+  <script src="audio-utils.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

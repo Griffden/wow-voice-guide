@@ -17,24 +17,44 @@
     "maxRows": 48,
     "intervalMs": 250
   },
-  "claudePath": "",
-  "model": "",
+  "deepgram": {
+    "apiKey": "",
+    "model": "flux-general-en",
+    "eotThreshold": 0.7,
+    "eotTimeoutMs": 5000,
+    "captureTimeoutMs": 30000,
+    "keyterms": [
+      "World of Warcraft",
+      "Azeroth",
+      "Questie",
+      "Horde",
+      "Alliance"
+    ]
+  },
+  "llm": {
+    "provider": "openai-compatible",
+    "endpoint": "https://api.openai.com/v1/chat/completions",
+    "apiKey": "",
+    "model": "gpt-6-luna",
+    "reasoningEffort": "none",
+    "temperature": 0.2,
+    "maxTokens": 500,
+    "timeoutMs": 45000
+  },
+  "fish": {
+    "apiKey": "",
+    "voiceId": "06c4b6c98f8a451cad28734427faaa9d",
+    "model": "s2.1-pro-free",
+    "latency": "balanced",
+    "speed": 1,
+    "volume": 0,
+    "speakTyped": false,
+    "timeoutMs": 60000
+  },
+  "audio": {
+    "volumePercent": 125
+  },
   "gameContext": true,
-  "primerFile": "docs/WOW-ADDON-PRIMER.md",
-  "permissionMode": "acceptEdits",
-  "allowedTools": [
-    "WebSearch",
-    "WebFetch",
-    "Bash(git:*)",
-    "Bash(npm:*)",
-    "Bash(npx:*)",
-    "Bash(node:*)",
-    "Bash(python:*)",
-    "Bash(pip:*)",
-    "Bash(pytest:*)",
-    "Bash(ls:*)",
-    "Bash(dir:*)"
-  ],
   "pollMs": 750,
   "progressWriteMs": 3000,
   "timeoutMs": 1800000

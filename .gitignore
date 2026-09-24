@@ -3,10 +3,15 @@ bridge/config.json
 bridge/state.json
 bridge/transcripts.json
 bridge/bridge.log
+bridge/audio/
 *.tmp
 
 # tooling
 node_modules/
+.npm-cache/
+.electron-cache/
+.electron-builder-cache/
+dist/
 tests/tmp/
 
 # OS / local artifacts

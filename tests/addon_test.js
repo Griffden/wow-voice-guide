@@ -117,7 +117,7 @@ test('hello goes out on the strip after login', () => {
   vm.run('STUB.RunTimers()'); // C_Timer.After(3, SayHello)
   const recs = stripRecords(vm);
   assert.equal(recs.length, 1);
-  assert.equal(recs[0].flags, 'h;c', 'a hello always carries the game context');
+  assert.equal(recs[0].flags, 'h;vol=125;c', 'a hello carries game context and the saved voice volume');
   assert.equal(recs[0].text, '');
   assert.equal(recs[0].session, vm.evaluate('WoWClaudeDB.session'));
 });
@@ -156,13 +156,13 @@ test('the game context describes the character and rides on the hello, then only
   // Turning it off sends an empty context at once (a hello), so the bridge drops what it had.
   vm.run('SlashCmdList.WOWCLAUDE("context off")');
   assert.equal(vm.evaluate('WoWClaudeDB.settings.context'), 'false');
-  const off = stripRecords(vm).filter(r => r.flags === 'h;c');
+  const off = stripRecords(vm).filter(r => r.flags === 'h;vol=125;c');
   assert.equal(off.length, 1);
   assert.equal(off[0].ctx, '');
   assert.ok(vm.evaluate('WoWClaudeDB.chats[2].history[#WoWClaudeDB.chats[2].history].text').includes('Game context is OFF'));
   // Back on: another hello, with the context again.
   vm.run('SlashCmdList.WOWCLAUDE("context on")');
-  const on = stripRecords(vm).filter(r => r.flags === 'h;c');
+  const on = stripRecords(vm).filter(r => r.flags === 'h;vol=125;c');
   assert.ok(on.some(r => r.ctx.includes('Character: Testchar')));
   assert.ok(vm.evaluate('WoWClaudeDB.chats[2].history[#WoWClaudeDB.chats[2].history].text').includes('Game context is ON'));
 });
@@ -246,7 +246,7 @@ test('until the bridge answers, Connect replaces Send and a message stays in the
   assert.equal(vm.evaluate('WoWClaudeInput:GetText()'), 'fix the bug', 'message kept in the box');
   const hello = stripRecords(vm);
   assert.equal(hello.length, 1);
-  assert.equal(hello[0].flags, 'h;c', 'a hello went out instead');
+  assert.equal(hello[0].flags, 'h;vol=125;c', 'a hello went out instead');
   assert.ok(texts().includes('Connecting...'));
   assert.ok(texts().includes('your message goes out as soon as it answers'));
   // No answer within CONNECT_WAIT: the attempt is reported as failed, Connect is back.
@@ -363,6 +363,55 @@ test('a sent message is encoded on the strip with the chat folder, then a slot r
   vm.run('SlashCmdList.WOWCLAUDE("cd")');
   assert.equal(vm.evaluate('WoWClaudeDB.chats[1].cwd'), '');
   assert.ok(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text').includes('C:\\proj'));
+});
+
+test('one in-game voice action carries the voice flag, replaces the placeholder transcript and accepts a waypoint', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('WoWClaude.StartVoice()');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  const rec = stripRecords(vm).find(r => r.id === id);
+  assert.ok(rec.flags.split(';').includes('v'), 'voice request is marked on the strip');
+  assert.equal(rec.text, '[Voice] Listening...');
+
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Go to Darkshire.", transcript = "Where should I go?", waypoint = { mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[1].text'), 'Where should I go?');
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].text'), 'Go to Darkshire.');
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoint.label'), 'Darkshire');
+  vm.run('WoWClaude.SetWaypoint(WoWClaudeDB.chats[1].history[2].waypoint)');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1431');
+  assert.equal(vm.evaluate('STUB.superTrackedWaypoint'), 'true');
+});
+
+test('/wow-claude bind assigns a window-independent Talk hotkey', () => {
+  const vm = newVM();
+  login(vm);
+  vm.run('SlashCmdList.WOWCLAUDE("bind F8")');
+  assert.equal(vm.evaluate('STUB.bindings.F8'), 'CLICK WoWVoiceGuideTalkButton:LeftButton');
+  assert.equal(vm.evaluate('WoWVoiceGuideTalkButton ~= nil'), 'true');
+});
+
+test('voice volume is saved in game and sent to the companion', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  assert.equal(vm.num('WoWClaudeDB.settings.voiceVolume'), 125);
+  assert.equal(vm.num('WoWVoiceGuideVolumeSlider:GetValue()'), 125);
+  vm.run('SlashCmdList.WOWCLAUDE("volume 165")');
+  assert.equal(vm.num('WoWClaudeDB.settings.voiceVolume'), 165);
+  assert.equal(vm.num('WoWVoiceGuideVolumeSlider:GetValue()'), 165);
+  assert.ok(stripRecords(vm).some(r => r.flags === 'vol=165' && r.text === ''));
+});
+
+test('Bindings.xml is left for WoW special-file auto-loading instead of ordinary TOC parsing', () => {
+  const addonDir = path.join(__dirname, '..', 'addon', 'WoWClaude');
+  const toc = fs.readFileSync(path.join(addonDir, 'WoWClaude.toc'), 'utf8');
+  const bindings = fs.readFileSync(path.join(addonDir, 'Bindings.xml'), 'utf8');
+  assert.doesNotMatch(toc, /^Bindings\.xml\s*$/m);
+  assert.match(bindings, /<Binding\s+name="WOWVOICEGUIDE_TALK"/);
 });
 
 test('a denied reply shows Allow, and Allow resends with the rules as flags', () => {

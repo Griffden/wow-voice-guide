@@ -87,14 +87,21 @@ function sameFolder(a, b) {
 // (no prompt), "d" = the player deleted this chat: forget its transcript and
 // session (no prompt), "allow=Rule1,Rule2" = add these permission rules before
 // running, "c" = the record carries a game-context field before the text (an
-// empty one clears the context the bridge keeps).
+// empty one clears the context the bridge keeps). "vol=125" sets companion
+// voice playback volume as a percentage (0..200).
 function parseFlags(flags) {
-  const out = { newSession: false, hello: false, forget: false, context: false, allow: [] };
+  const out = { newSession: false, hello: false, forget: false, context: false, voice: false, voiceCancel: false, volume: null, allow: [] };
   for (const tok of String(flags || '').split(';')) {
     if (tok === 'n') out.newSession = true;
     else if (tok === 'h') out.hello = true;
     else if (tok === 'd') out.forget = true;
     else if (tok === 'c') out.context = true;
+    else if (tok === 'v') out.voice = true;
+    else if (tok === 'x') out.voiceCancel = true;
+    else if (tok.startsWith('vol=')) {
+      const value = Number(tok.slice(4));
+      if (Number.isFinite(value)) out.volume = Math.max(0, Math.min(200, Math.round(value)));
+    }
     else if (tok.startsWith('allow=')) out.allow.push(...tok.slice(6).split(',').map(s => s.trim()).filter(Boolean));
   }
   return out;
@@ -137,7 +144,8 @@ function parseOutbox(src) {
   const session = (b.match(/\["session"\]\s*=\s*"([0-9a-zA-Z]*)"/) || [])[1] || '';
   const chat = (b.match(/\["chat"\]\s*=\s*"([0-9a-zA-Z]*)"/) || [])[1] || '';
   const newSession = /\["newSession"\]\s*=\s*true/.test(b);
-  const job = { id, session, chat, text, cwd, newSession, via: 'reload' };
+  const voice = /\["voice"\]\s*=\s*true/.test(b);
+  const job = { id, session, chat, text, cwd, newSession, voice, via: 'reload' };
   const ctx = b.match(/\["ctx"\]\s*=\s*"([0-9a-fA-F]*)"/);
   if (ctx) job.ctx = fromHex(ctx[1]);
   return job;
@@ -240,6 +248,10 @@ function luaTable(globalName, records, opts = {}) {
     lines.push(`\t\t\ttext = ${luaStr(r.text)},`);
     lines.push(`\t\t\tcwd = ${luaStr(r.cwd || '')},`);
     lines.push(`\t\t\tsession = ${luaStr(r.session || '')},`);
+    if (r.transcript) lines.push(`\t\t\ttranscript = ${luaStr(r.transcript)},`);
+    if (r.waypoint) {
+      lines.push(`\t\t\twaypoint = { mapId = ${Number(r.waypoint.mapId) || 0}, x = ${Number(r.waypoint.x) || 0}, y = ${Number(r.waypoint.y) || 0}, label = ${luaStr(r.waypoint.label || '')} },`);
+    }
     if (Array.isArray(r.denied) && r.denied.length) {
       lines.push(`\t\t\tdenied = { ${r.denied.map(luaStr).join(', ')} },`);
     }

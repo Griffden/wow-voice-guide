@@ -98,16 +98,17 @@ try {
   const { dest, copied } = copyAddon(client);
   console.log(`addon    : ${copied} file(s) -> ${dest}`);
   const cfg = writeConfig(client, account);
-  console.log(`project  : ${cfg.defaultCwd}  (change with /wow-claude cd in game, or defaultCwd in config.json)`);
+  console.log(`project  : ${cfg.defaultCwd}`);
   console.log('slots    : building the reply-slot pool and signal files...');
   const r = spawnSync(process.execPath, [path.join(BRIDGE, 'install-slots.js')], { stdio: 'inherit' });
   if (r.status !== 0) throw new Error('install-slots.js failed');
   console.log(`
 Done. Next:
   1. Fully quit and relaunch World of Warcraft (it only discovers new addon files at launch).
-  2. Enable "WoW Claude" at the character select AddOns screen (the WoW Claude slot ### entries stay enabled).
-  3. Start the bridge:  npm start   (in this terminal; bridge\\start-window.cmd opens its own window)
-  4. In game:  /wow-claude
+  2. Enable "WoW Voice Guide" at the character select AddOns screen (the slot ### entries stay enabled).
+  3. Start the desktop companion: npm start
+  4. Enter Deepgram, Fish Audio, and brain-provider settings in the companion.
+  5. In game: /voice-guide, then press Talk.
 `);
 } catch (e) {
   console.error('setup failed:', e.message);

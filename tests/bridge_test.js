@@ -13,12 +13,16 @@ test('luaStr escapes everything Lua 5.1 needs', () => {
 });
 
 test('parseFlags reads new-session, hello, forget, context and allow lists', () => {
-  const none = { newSession: false, hello: false, forget: false, context: false, allow: [] };
+  const none = { newSession: false, hello: false, forget: false, context: false, voice: false, voiceCancel: false, volume: null, allow: [] };
   assert.deepEqual(P.parseFlags(''), none);
   assert.deepEqual(P.parseFlags('n'), { ...none, newSession: true });
   assert.deepEqual(P.parseFlags('h'), { ...none, hello: true });
   assert.deepEqual(P.parseFlags('d'), { ...none, forget: true });
   assert.deepEqual(P.parseFlags('h;c'), { ...none, hello: true, context: true });
+  assert.deepEqual(P.parseFlags('v'), { ...none, voice: true });
+  assert.deepEqual(P.parseFlags('x'), { ...none, voiceCancel: true });
+  assert.deepEqual(P.parseFlags('h;vol=125;c'), { ...none, hello: true, context: true, volume: 125 });
+  assert.deepEqual(P.parseFlags('vol=999'), { ...none, volume: 200 });
   assert.deepEqual(P.parseFlags('n;allow=WebSearch, Bash(git:*),'), { ...none, newSession: true, allow: ['WebSearch', 'Bash(git:*)'] });
 });
 
@@ -26,7 +30,7 @@ test('jobsFromStrip parses the current record format and keeps separators inside
   const rec = ['sess', 'chat1', '12', 'realms', 'allow=WebSearch', 'My chat', 'hello\x1Fworld'].join('\x1F');
   const jobs = P.jobsFromStrip(12, rec);
   assert.equal(jobs.length, 1);
-  assert.deepEqual(jobs[0], { session: 'sess', chat: 'chat1', id: 12, cwd: 'realms', newSession: false, hello: false, forget: false, context: false, allow: ['WebSearch'], name: 'My chat', text: 'hello\x1Fworld', via: 'pixel' });
+  assert.deepEqual(jobs[0], { session: 'sess', chat: 'chat1', id: 12, cwd: 'realms', newSession: false, hello: false, forget: false, context: false, voice: false, voiceCancel: false, volume: null, allow: ['WebSearch'], name: 'My chat', text: 'hello\x1Fworld', via: 'pixel' });
 });
 
 test('jobsFromStrip reads the game context field only when the flags say so', () => {
@@ -88,7 +92,8 @@ test('jobsFromStrip handles several records per frame and older formats', () => 
 test('parseOutbox decodes the SavedVariables fallback', () => {
   const hex = s => Buffer.from(s, 'utf8').toString('hex');
   const src = `WoWClaudeDB = {\n["outbox"] = {\n["id"] = 7,\n["session"] = "abc123",\n["chat"] = "c1",\n["text"] = "${hex('héllo')}",\n["cwd"] = "${hex('realms')}",\n["newSession"] = true,\n},\n["settings"] = {},\n}`;
-  assert.deepEqual(P.parseOutbox(src), { id: 7, session: 'abc123', chat: 'c1', text: 'héllo', cwd: 'realms', newSession: true, via: 'reload' });
+  assert.deepEqual(P.parseOutbox(src), { id: 7, session: 'abc123', chat: 'c1', text: 'héllo', cwd: 'realms', newSession: true, voice: false, via: 'reload' });
+  assert.equal(P.parseOutbox(src.replace('["newSession"] = true,', '["newSession"] = true,\n["voice"] = true,')).voice, true);
   const withCtx = src.replace('["newSession"]', `["ctx"] = "${hex('Character: Testchar')}",\n["newSession"]`);
   assert.equal(P.parseOutbox(withCtx).ctx, 'Character: Testchar');
   assert.equal(P.parseOutbox('WoWClaudeDB = {}'), null);
@@ -158,4 +163,13 @@ test('slotNumber wraps and SILENT_WAV is a valid RIFF header', () => {
   assert.equal(P.chatKey({ session: 's', chat: 'c' }), 's:c');
   assert.equal(P.sessKey({ session: 's', chat: 'c' }), 'chat:c');
   assert.equal(P.sessKey({ session: 's', chat: '' }), 's:default');
+});
+
+test('luaTable includes a voice transcript and validated waypoint fields', () => {
+  const lua = P.luaTable('Inbox', [{
+    chat: 'c', id: 3, status: 'done', text: 'answer', transcript: 'question',
+    waypoint: { mapId: 1431, x: 0.452, y: 0.678, label: 'Darkshire' },
+  }], { now: 1 });
+  assert.ok(lua.includes('transcript = "question"'));
+  assert.ok(lua.includes('waypoint = { mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }'));
 });

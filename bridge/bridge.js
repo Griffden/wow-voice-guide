@@ -1,33 +1,31 @@
 #!/usr/bin/env node
 'use strict';
-// WoW Claude bridge: the half of WoWClaude that lives outside the game.
+// WoW Voice Guide bridge: the half of the assistant that lives outside the game.
 //
 //   OUT  capture.ps1 screen-captures the addon's pixel strip -> one or more
 //        {session, chat, id, cwd, flags, text} records per frame
 //        (fallback: the game's SavedVariables file, written on /reload)
-//   RUN  `claude -p` headless in the chat's folder, streaming progress.
-//        Each chat is its own Claude session; up to maxParallel run at once.
+//   RUN  send the transcript, recent chat, and live game context to the
+//        configured guide model; send its speech text to Fish Audio.
 //   IN   we write the latest reply/status of every chat into every
 //        WoWClaude_S### slot addon (the game loads a fresh one from a timer),
 //        flip a signal .wav per message, and also write Inbox.lua for the
 //        reload path.
 //
-// Zero npm dependencies. Run with npm start or `node bridge.js`.
+// Normally forked by the Electron desktop companion (`npm start`).
 //   --once            handle one pending SavedVariables prompt and exit
 //   --inject "text"   pretend the strip said this and exit when done
 //   --project <dir>   default folder for chats that haven't picked one
 //
-// Like `claude` itself, the bridge works in the folder it was started from:
-// `cd my-project && wow-claude` makes my-project the default for every chat
-// that hasn't chosen its own with /wow-claude cd. Started from inside this repo (npm
-// start), it falls back to defaultCwd in config.json.
+// Internal WoWClaude names are retained for compatibility with the upstream
+// pixel/slot transport and existing SavedVariables.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const P = require('./protocol'); // the pure protocol code, unit-tested in tests/bridge_test.js
+const Providers = require('./providers');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -36,9 +34,8 @@ const LOG_FILE = path.join(HERE, 'bridge.log');
 
 const argv = process.argv.slice(2);
 if (argv.includes('--help') || argv.includes('-h')) {
-  console.log('wow-claude [--project <dir>] [--once] [--inject "text"]\n\n' +
-    'Runs the WoW Claude bridge. Chats without a folder of their own work in <dir>,\n' +
-    'or in the folder you started it from, or in defaultCwd from bridge/config.json.');
+  console.log('bridge.js [--project <dir>] [--once] [--inject "text"]\n\n' +
+    'Runs the WoW Voice Guide transport worker. Voice capture requires the desktop companion.');
   process.exit(0);
 }
 let cfg;
@@ -82,6 +79,8 @@ function siblingFolders() {
 const SLOTS = cfg.slots || 200;
 const MAX_PARALLEL = cfg.maxParallel || 3;
 const cap = Object.assign({ enabled: true, processName: 'WowB', cellPx: 4, cellsPerRow: 200, maxRows: 48, intervalMs: 250 }, cfg.capture || {});
+const AUDIO_DIR = path.join(HERE, 'audio');
+const voiceRequests = new Map();
 
 let state = readJson(STATE_FILE, { lastId: 0, sessions: {}, handled: {} });
 if (!state.handled) state.handled = {};
@@ -182,7 +181,7 @@ function log(...parts) {
   try { fs.appendFileSync(LOG_FILE, line + '\n'); } catch {}
 }
 
-const { pad3, chatKey, sessKey, luaStr, SILENT_WAV, jobsFromStrip, ruleFor, describeToolUse } = P;
+const { pad3, chatKey, sessKey, luaStr, SILENT_WAV, jobsFromStrip } = P;
 const slotNumber = id => P.slotNumber(id, SLOTS);
 const alreadyHandled = job => P.alreadyHandled(state, job);
 const markHandled = job => P.markHandled(state, job);
@@ -191,13 +190,6 @@ function atomicWrite(file, content) {
   const tmp = file + '.tmp';
   fs.writeFileSync(tmp, content);
   fs.renameSync(tmp, file);
-}
-
-function resolveClaude() {
-  if (cfg.claudePath) return cfg.claudePath;
-  const local = path.join(os.homedir(), '.local', 'bin', 'claude.exe');
-  if (fs.existsSync(local)) return local;
-  return 'claude';
 }
 
 // ---------------------------------------------------------------------------
@@ -325,41 +317,31 @@ function gameContext() {
   return (state.context && state.context.text) || '';
 }
 
-// The addon/macro primer that goes into the system prompt with the context.
-// Read on every run so edits count without a restart; "" in the config turns
-// it off. Relative paths are taken from the repo (docs/WOW-ADDON-PRIMER.md).
-const PRIMER_FILE = cfg.primerFile === undefined ? 'docs/WOW-ADDON-PRIMER.md' : cfg.primerFile;
-let warnedNoPrimer = false;
-function primer() {
-  if (!PRIMER_FILE) return '';
-  const file = path.resolve(REPO, PRIMER_FILE);
-  try { return fs.readFileSync(file, 'utf8'); } catch (e) {
-    if (!warnedNoPrimer) { warnedNoPrimer = true; log(`primer: cannot read ${file} (${e.code || e.message}); running without it`); }
-    return '';
-  }
-}
-
-// Persist newly allowed rules so they stick across bridge restarts.
-function allowRules(rules) {
-  const current = new Set(cfg.allowedTools || []);
-  const added = rules.filter(r => r && !current.has(r));
-  if (!added.length) return [];
-  cfg.allowedTools = [...current, ...added];
-  try {
-    const onDisk = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    onDisk.allowedTools = cfg.allowedTools;
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(onDisk, null, 2) + '\n');
-  } catch (e) { log('could not save config.json:', e.message); }
-  return added;
-}
-
 // ---------------------------------------------------------------------------
-// Running Claude
+// Running the configured guide model
 // ---------------------------------------------------------------------------
 
 function submit(job) {
   if (alreadyHandled(job)) return;
   if (job.ctx !== undefined) setContext(job);
+  if (job.volume !== null && job.volume !== undefined) {
+    const volumePercent = Math.max(0, Math.min(200, Math.round(Number(job.volume) || 0)));
+    if (process.send) process.send({ type: 'voice:volume', volumePercent });
+    log(`#${job.id}${job.session ? '@' + job.session : ''} voice volume ${volumePercent}%`);
+    if (!job.hello && !job.forget && !job.voice && !job.voiceCancel && !String(job.text || '').trim()) {
+      markHandled(job);
+      saveState();
+      signal('ack', job.id, true);
+      return;
+    }
+  }
+  if (job.voiceCancel) {
+    markHandled(job);
+    saveState();
+    signal('ack', job.id, true);
+    if (process.send) process.send({ type: 'voice:cancel', chat: job.chat, targetId: Number(job.text) || 0 });
+    return;
+  }
   if (job.forget) {
     // A deleted chat: forget it and ack. No Claude run.
     markHandled(job);
@@ -401,7 +383,7 @@ function drainQueue() {
   }
 }
 
-function runJob(job) {
+function prepareJob(job) {
   const key = chatKey(job);
   const cwd = resolveCwd(job.cwd);
   job.cwd = cwd;
@@ -418,119 +400,89 @@ function runJob(job) {
       `\nUse /wow-claude cd <folder> to pick one, or /wow-claude cd alone for the default.`);
     return;
   }
-  const skey = sessKey(job);
-  if (job.newSession) { delete state.sessions[skey]; delete state.sessions[key]; }
-  // Claude keeps sessions per project folder, so a session can't follow a chat
-  // into another folder: start fresh there.
-  const prevCwd = state.sessionCwd && state.sessionCwd[skey];
-  if (prevCwd && !sameFolder(prevCwd, cwd) && state.sessions[skey]) {
-    log(`${tag} folder changed (${prevCwd} -> ${cwd}): new session`);
-    delete state.sessions[skey]; delete state.sessions[key];
-  }
-  if (Array.isArray(job.allow) && job.allow.length) {
-    const added = allowRules(job.allow);
-    log(`${tag} allowed: ${job.allow.join(', ')}${added.length ? '' : ' (already allowed)'}`);
-  }
   maybeOfferRestore(job);
+  running.set(key, { job, child: null });
+  return { key, cwd, tag };
+}
+
+function runJob(job) {
+  const prepared = prepareJob(job);
+  if (!prepared) return;
+  const { key, cwd, tag } = prepared;
+  if (job.voice) {
+    const requestId = `${job.session || 'session'}:${job.chat || 'chat'}:${job.id}`;
+    job.requestId = requestId;
+    voiceRequests.set(requestId, job);
+    publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'listening...', cwd }, true);
+    log(`${tag} (${job.via}) waiting for a Flux transcript`);
+    if (process.send) process.send({ type: 'voice:start', requestId, chat: job.chat, id: job.id });
+    else {
+      voiceRequests.delete(requestId);
+      finish(job, 'error', 'Voice capture requires the desktop companion. Start it with npm start.');
+    }
+    return;
+  }
+  runAssistantJob(job, job.text);
+}
+
+async function runAssistantJob(job, text) {
+  const key = chatKey(job);
+  const prior = (((transcripts.chats || {})[job.chat] || {}).messages || []).slice();
+  job.text = String(text || '').trim();
+  job.transcript = job.voice ? job.text : '';
+  if (!job.text) {
+    finish(job, 'error', 'I did not hear any speech. Try again.');
+    return;
+  }
   noteMessage(job, 'user', job.text);
-  const resume = state.sessions[skey] || state.sessions[key];
-
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--permission-mode', cfg.permissionMode || 'acceptEdits'];
-  if (Array.isArray(cfg.allowedTools) && cfg.allowedTools.length) args.push('--allowedTools', ...cfg.allowedTools);
-  if (cfg.model) args.push('--model', cfg.model);
-  if (resume) args.push('--resume', resume);
-  const sys = P.systemPrompt(gameContext(), primer());
-  if (sys) args.push('--append-system-prompt', sys);
-
-  const env = { ...process.env };
-  delete env.CLAUDECODE;
-
-  log(`${tag} (${job.via}) starting in ${cwd}${resume ? ' (resume ' + resume.slice(0, 8) + ')' : ' (new session)'}${sys ? ' [game context]' : ''}${running.size ? ' [' + (running.size + 1) + ' running]' : ''}`);
-  const child = spawn(resolveClaude(), args, { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-  running.set(key, { job, child });
-  publish(key, { chat: job.chat, id: job.id, status: 'working', text: resume ? 'thinking...' : 'starting a new session...', cwd, session: resume }, true);
-  child.stdin.end(job.text);
-
-  const progress = [];
-  let sessionId = resume || '';
-  let resultText = null;
-  let isError = false;
-  let denied = [];
-  let stderr = '';
-  let buffer = '';
-
-  const pushProgress = (line) => {
-    progress.push(line);
-    while (progress.length > 10) progress.shift();
-    beat(job);
-    publish(key, { chat: job.chat, id: job.id, status: 'working', text: progress.join('\n'), cwd, session: sessionId }, false);
-  };
-  // Long thinking stretches produce no tool events; keep the heartbeat alive anyway.
-  const keepalive = setInterval(() => beat(job), 45000);
-
-  const handleEvent = (ev) => {
-    if (ev.session_id) sessionId = ev.session_id;
-    if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
-      for (const block of ev.message.content) {
-        if (block.type === 'tool_use') pushProgress(describeToolUse(block));
-        else if (block.type === 'text' && block.text && block.text.trim()) {
-          const snippet = block.text.trim().replace(/\s+/g, ' ');
-          pushProgress(snippet.length > 140 ? snippet.slice(0, 140) + '...' : snippet);
-        }
-      }
-    } else if (ev.type === 'result') {
-      isError = !!ev.is_error;
-      resultText = typeof ev.result === 'string' ? ev.result : JSON.stringify(ev.result ?? '', null, 2);
-      if (Array.isArray(ev.permission_denials) && ev.permission_denials.length) {
-        denied = [...new Set(ev.permission_denials.map(ruleFor))];
-        const list = ev.permission_denials.map(d => d.tool_name + (d.tool_input && d.tool_input.command ? ': ' + d.tool_input.command : '')).join('\n  ');
-        resultText += `\n\n[bridge] Claude needed ${ev.permission_denials.length} action(s) that aren't allowed yet:\n  ${list}\nUse the Allow button below to permit them and let it continue.`;
+  beat(job);
+  publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'thinking...', transcript: job.transcript, cwd: job.cwd }, true);
+  if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
+  try {
+    const answer = await Providers.requestAssistant(cfg, { context: gameContext(), history: prior, text: job.text });
+    let speechError = '';
+    let audioStarted = false;
+    if (job.voice || (cfg.fish && cfg.fish.speakTyped)) {
+      publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'speaking...', transcript: job.transcript, cwd: job.cwd }, true);
+      try {
+        const audio = await Providers.requestFishSpeech(cfg, answer.speech);
+        fs.mkdirSync(AUDIO_DIR, { recursive: true });
+        const file = path.join(AUDIO_DIR, `reply-${process.pid}-${job.id}.wav`);
+        fs.writeFileSync(file, audio);
+        if (process.send) { process.send({ type: 'audio:play', file }); audioStarted = true; }
+      } catch (e) {
+        speechError = e.message;
+        log(`#${job.id} Fish speech failed: ${speechError}`);
+        if (process.send) process.send({ type: 'status', status: { state: 'error', text: `Text answer ready; Fish voice failed: ${speechError}` } });
       }
     }
-  };
+    finish(job, 'done', answer.display, '', [], { transcript: job.transcript, waypoint: answer.waypoint, speechError });
+    if (!audioStarted && !speechError && process.send) process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
+  } catch (e) {
+    finish(job, 'error', Providers.redact(e.message || String(e)), '', [], { transcript: job.transcript });
+    if (process.send) process.send({ type: 'status', status: { state: 'error', text: Providers.redact(e.message || String(e)) } });
+  }
+}
 
-  child.stdout.on('data', (chunk) => {
-    buffer += chunk.toString('utf8');
-    let nl;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line) continue;
-      try { handleEvent(JSON.parse(line)); } catch {}
-    }
-  });
-  child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
-
-  const timer = setTimeout(() => {
-    log(`${tag} timed out after ${cfg.timeoutMs} ms, killing`);
-    child.kill();
-  }, cfg.timeoutMs || 1800000);
-
-  child.on('error', (err) => {
-    clearTimeout(timer);
-    clearInterval(keepalive);
-    finish(job, 'error', `Could not start claude: ${err.message}\nSet "claudePath" in config.json.`);
-  });
-
-  child.on('close', (code) => {
-    clearTimeout(timer);
-    clearInterval(keepalive);
-    if (buffer.trim()) { try { handleEvent(JSON.parse(buffer.trim())); } catch {} }
-    if (sessionId) { state.sessions[skey] = sessionId; (state.sessionCwd = state.sessionCwd || {})[skey] = cwd; }
-    if (resultText !== null && !isError) finish(job, 'done', resultText, sessionId, denied);
-    else if (resultText !== null) finish(job, 'error', resultText, sessionId, denied);
-    else finish(job, 'error', `claude exited with code ${code} and no result.\n${stderr.trim().slice(-1500)}`, sessionId);
+if (process.send) {
+  process.on('message', message => {
+    if (!message || !message.type || !message.requestId) return;
+    const job = voiceRequests.get(message.requestId);
+    if (!job) return;
+    voiceRequests.delete(message.requestId);
+    if (message.type === 'voice:transcript') runAssistantJob(job, message.transcript);
+    else if (message.type === 'voice:error') finish(job, 'error', message.error || 'Voice capture failed.');
   });
 }
 
-function finish(job, status, text, session, denied) {
+function finish(job, status, text, session, denied, extra = {}) {
   if (job.finished) return; // spawn failures fire both 'error' and 'close'
   job.finished = true;
   running.delete(chatKey(job));
   markHandled(job);
   saveState();
   noteMessage(job, status === 'done' ? 'claude' : 'system', status === 'done' ? text : 'Bridge error: ' + text);
-  publish(chatKey(job), { chat: job.chat, id: job.id, status, text, cwd: job.cwd, session, denied }, true);
+  publish(chatKey(job), { chat: job.chat, id: job.id, status, text, cwd: job.cwd, session, denied, ...extra }, true);
   signal('sig', job.id, true);
   log(`#${job.id}${job.session ? '@' + job.session : ''} ${status} (${text.length} chars)`);
   drainQueue();
@@ -577,20 +529,18 @@ function startCapture() {
 }
 
 function banner() {
-  console.log('WoW Claude bridge');
-  console.log(`  folder   : ${DEFAULT_CWD}  (${DEFAULT_CWD_SOURCE}; chats can override with /wow-claude cd)`);
+  console.log('WoW Voice Guide bridge');
+  console.log(`  folder   : ${DEFAULT_CWD}  (${DEFAULT_CWD_SOURCE})`);
   console.log(`  addons   : ${cfg.addonDir}`);
   console.log(`  addon    : ${addonInstalled() ? 'installed' : 'NOT INSTALLED - run: node setup.js, then restart WoW'}`);
   console.log(`  slots    : ${slotsInstalled() ? SLOTS + ' installed' : 'NOT INSTALLED - run: node setup.js (or node bridge/install-slots.js), then restart WoW'}`);
   console.log(`  capture  : ${cap.enabled ? 'on (' + cap.processName + ', ' + cap.cellsPerRow + 'x' + cap.maxRows + ' cells of ' + cap.cellPx + 'px)' : 'off'}`);
   console.log(`  parallel : up to ${MAX_PARALLEL} chats at once`);
   console.log(`  fallback : ${cfg.savedVariablesFile}`);
-  console.log(`  claude   : ${resolveClaude()}`);
-  console.log(`  mode     : ${cfg.permissionMode}, ${(cfg.allowedTools || []).length} allowed tool rules`);
-  console.log(`  sessions : ${Object.keys(state.sessions).length} saved`);
+  console.log(`  brain    : ${((cfg.llm || {}).provider || 'openai-compatible')} / ${((cfg.llm || {}).model || 'NOT CONFIGURED')}`);
+  console.log(`  speech   : Fish Audio / ${((cfg.fish || {}).model || 's2.1-pro-free')} / ${((cfg.fish || {}).voiceId ? 'voice selected' : 'NO VOICE ID')}`);
   const ctx = gameContext();
   console.log(`  context  : ${cfg.gameContext === false ? 'off (gameContext in config.json)' : ctx ? (ctx.split('\n').find(l => /^Character:/i.test(l)) || ctx.split('\n')[0]).slice(0, 100) : 'none yet (the addon sends it with its hello; /wow-claude context in game)'}`);
-  console.log(`  primer   : ${!PRIMER_FILE ? 'off (primerFile in config.json)' : primer() ? path.resolve(REPO, PRIMER_FILE) + ' (' + primer().length + ' chars, with the context)' : 'NOT FOUND: ' + path.resolve(REPO, PRIMER_FILE)}`);
   console.log('Leave this window open while you play. Ctrl+C to stop.\n');
 }
 

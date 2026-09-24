@@ -1,4 +1,4 @@
--- WoWClaude: talk to local Claude Code sessions from inside WoW, without reloading.
+-- WoW Voice Guide: talk to an AI guide from inside WoW, without reloading.
 --
 -- The WoW sandbox has no network and no file reads at runtime. Two doors remain open:
 --
@@ -19,6 +19,11 @@ local ADDON_NAME = ...
 local WoWClaude = {}
 _G.WoWClaude = WoWClaude
 local Codec = WoWClaude_Codec
+
+-- Labels consumed by Bindings.xml so this appears under the AddOns section of
+-- WoW's normal Key Bindings screen.
+BINDING_HEADER_WOWVOICEGUIDE = "WoW Voice Guide"
+BINDING_NAME_WOWVOICEGUIDE_TALK = "Talk to the Voice Guide"
 
 local DEFAULT_CWD = "" -- empty = the bridge's configured defaultCwd
 local MAX_HISTORY = 200
@@ -54,7 +59,7 @@ local BACKDROP = {
 
 local ROLE_STYLE = {
 	user   = { label = "You",    color = { 0.49, 0.78, 1.00 }, bg = { 0.25, 0.45, 0.75, 0.16 } },
-	claude = { label = "Claude", color = { 1.00, 0.82, 0.25 }, bg = { 0.85, 0.70, 0.30, 0.10 } },
+	claude = { label = "Guide", color = { 1.00, 0.82, 0.25 }, bg = { 0.85, 0.70, 0.30, 0.10 } },
 	system = { label = "System", color = { 0.62, 0.62, 0.62 }, bg = { 0.50, 0.50, 0.50, 0.10 } },
 }
 
@@ -160,6 +165,7 @@ local function InitDB()
 	s.echo = s.echo or "full" -- how much of each reply to print in the game chat
 	s.mode = s.mode or "pixel"
 	s.interval = s.interval or 20
+	s.voiceVolume = math.max(0, math.min(200, math.floor(tonumber(s.voiceVolume) or 125)))
 	s.cwd = s.cwd or DEFAULT_CWD
 	s.width = s.width or 780
 	s.height = s.height or 500
@@ -192,8 +198,8 @@ local function InitDB()
 	if not FindChat(db.activeChat) then db.activeChat = db.chats[1].id end
 end
 
-local function AddHistory(chat, role, text, id, denied)
-	table.insert(chat.history, { role = role, text = text, id = id, t = time(), denied = denied })
+local function AddHistory(chat, role, text, id, denied, waypoint)
+	table.insert(chat.history, { role = role, text = text, id = id, t = time(), denied = denied, waypoint = waypoint })
 	while #chat.history > MAX_HISTORY do
 		table.remove(chat.history, 1)
 	end
@@ -539,7 +545,7 @@ function WoWClaude.CheckConnection()
 			local c = queued and ActiveChat()
 			if c and c.id == queued.chat and not c.pendingId then
 				if ui.input and Trim(ui.input:GetText() or "") == queued.text then ui.input:SetText("") end
-				WoWClaude.Send(queued.text, queued.allow)
+				WoWClaude.Send(queued.text, queued.allow, queued.voice)
 			end
 		elseif GetTime() - run.connectingAt > CONNECT_WAIT then
 			run.connectingAt, run.connectFailed = nil, true
@@ -560,6 +566,7 @@ function WoWClaude.UpdateConnect()
 	if not ui.connect or not ui.send then return end
 	local connected = WoWClaude.IsConnected()
 	ui.send:SetShown(connected)
+	if ui.talk then ui.talk:SetShown(connected) end
 	ui.connect:SetShown(not connected)
 	if connected then return end
 	if run.connectingAt then
@@ -654,8 +661,16 @@ local function ApplyReplies(replies)
 			matched = true
 			MarkAcked(r.id)
 			local denied = type(r.denied) == "table" and #r.denied > 0 and r.denied or nil
+			if r.transcript and r.transcript ~= "" then
+				for i = #c.history, 1, -1 do
+					if c.history[i].id == r.id and c.history[i].role == "user" then
+						c.history[i].text = r.transcript
+						break
+					end
+				end
+			end
 			if r.status == "done" then
-				Finish(c, "claude", r.text or "", denied)
+				Finish(c, "claude", r.text or "", denied, r.waypoint)
 			elseif r.status == "error" then
 				Finish(c, "system", "Bridge error: " .. tostring(r.text), denied)
 			elseif r.status == "working" then
@@ -837,9 +852,10 @@ local function ProcessInbox()
 	if inbox.restore then ImportRestore(inbox.restore) end
 end
 
-Finish = function(chat, role, text, denied)
-	AddHistory(chat, role, text, chat.pendingId, denied)
+Finish = function(chat, role, text, denied, waypoint)
+	AddHistory(chat, role, text, chat.pendingId, denied, waypoint)
 	chat.pendingId = nil
+	chat.voicePending = nil
 	chat.progress = nil
 	if run.act then run.act[chat.id] = nil end
 	NotedBridge()
@@ -869,7 +885,7 @@ end
 -- are meaningless markup to Claude; their tooltips are what the player sees).
 -- Every game API here is optional: whatever the client lacks is left out.
 
-local CONTEXT_MAX = 700 -- bytes of context per record; the strip has ~3.2 KB for everything
+local CONTEXT_MAX = 1500 -- bytes of context per record; the strip has ~3.2 KB for everything
 local LINK_LINES_MAX = 30 -- tooltip lines kept per link
 local LINK_BYTES_MAX = 900 -- bytes kept per link
 
@@ -954,6 +970,24 @@ function WoWClaude.GameContext()
 	end
 	if #progress > 0 then table.insert(lines, table.concat(progress, "; ")) end
 
+	-- The selected or super-tracked quest is the most useful grounding for a voice
+	-- question. Every call is capability-checked because Forever's beta API moves.
+	local questId = Try(C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID)
+	if not questId or questId == 0 then questId = Try(C_QuestLog and C_QuestLog.GetSelectedQuest) end
+	if type(questId) == "number" and questId > 0 then
+		local qname = Try(C_QuestLog and C_QuestLog.GetTitleForQuestID, questId)
+		table.insert(lines, "Active quest: " .. tostring(qname or "Unknown") .. " (id " .. questId .. ")")
+		local objectives = Try(C_QuestLog and C_QuestLog.GetQuestObjectives, questId)
+		if type(objectives) == "table" then
+			for i = 1, math.min(#objectives, 5) do
+				local objective = objectives[i]
+				if type(objective) == "table" and objective.text then
+					table.insert(lines, "Objective: " .. tostring(objective.text) .. (objective.finished and " (complete)" or ""))
+				end
+			end
+		end
+	end
+
 	-- Classic-style talent tabs: name, icon, points spent.
 	local tabs = Try(GetNumTalentTabs)
 	if type(tabs) == "number" and tabs > 0 then
@@ -988,6 +1022,24 @@ function WoWClaude.GameContext()
 	local s = table.concat(lines, "\n"):gsub("[\30\31]", " ")
 	if #s > CONTEXT_MAX then s = s:sub(1, CONTEXT_MAX) end
 	return s
+end
+
+function WoWClaude.SetWaypoint(point)
+	if type(point) ~= "table" or type(point.mapId) ~= "number" or type(point.x) ~= "number" or type(point.y) ~= "number" then return end
+	if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates) then
+		print("WoW Voice Guide: this client does not expose user waypoints.")
+		return
+	end
+	local ok, mapPoint = pcall(UiMapPoint.CreateFromCoordinates, point.mapId, point.x, point.y)
+	if not ok or not mapPoint then
+		print("WoW Voice Guide: could not create that waypoint.")
+		return
+	end
+	local set = pcall(C_Map.SetUserWaypoint, mapPoint)
+	if set and C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
+		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
+	end
+	if set then print("WoW Voice Guide waypoint: " .. (point.label or "destination")) end
 end
 
 -- The context to put on the next record, or nil when the bridge already has
@@ -1068,10 +1120,11 @@ end
 ---------------------------------------------------------------------------
 
 -- allow: optional list of permission rules to grant before this message runs.
-function WoWClaude.Send(text, allow)
+function WoWClaude.Send(text, allow, voice)
 	local c = ActiveChat()
 	if not c then return end
 	text = Trim(text or "")
+	if voice and text == "" then text = "[Voice] Listening..." end
 	if c.pendingId then
 		-- Typing while waiting: keep the draft, and check for the reply.
 		if text ~= "" then c.draft = text end
@@ -1088,14 +1141,14 @@ function WoWClaude.Send(text, allow)
 		-- CheckConnection sends it the moment the light turns green. If the bridge
 		-- never answers, the text is still in the box for a later try.
 		if ui.input then ui.input:SetText(text) end
-		run.sendOnConnect = { chat = c.id, text = text, allow = allow }
+		run.sendOnConnect = { chat = c.id, text = text, allow = allow, voice = voice }
 		if not run.connectingAt then WoWClaude.Connect() end
 		WoWClaude.Toggle(true)
 		return
 	end
 	-- Shift-clicked links become [Name] plus their tooltip, which is what Claude can read.
-	local links
-	text, links = WoWClaude.ExpandLinks(text)
+	local links = 0
+	if not voice then text, links = WoWClaude.ExpandLinks(text) end
 	local limit = Codec.MAX_PAYLOAD - 300
 	if #text > limit then
 		AddHistory(c, "system", "That message is too long for one send (" .. #text .. " chars, max ~" .. limit .. "). Split it up." .. (links > 0 and " Each linked item adds its tooltip to the message." or ""))
@@ -1109,6 +1162,7 @@ function WoWClaude.Send(text, allow)
 	local id = db.lastSeq
 	local tokens = {}
 	if c.resetNext then table.insert(tokens, "n") end
+	if voice then table.insert(tokens, "v") end
 	if allow and #allow > 0 then table.insert(tokens, "allow=" .. table.concat(allow, ",")) end
 	local flags = table.concat(tokens, ";")
 	local newSession = c.resetNext and true or nil
@@ -1121,15 +1175,17 @@ function WoWClaude.Send(text, allow)
 		cwd = ToHex(c.cwd),
 		ctx = ctx and ToHex(ctx) or nil,
 		newSession = newSession,
+		voice = voice and true or nil,
 		t = time(),
 	}
 	c.pendingId = id
+	c.voicePending = voice and true or nil
 	c.draft = nil
 	c.progress = nil
-	AddHistory(c, "user", text, id)
+	AddHistory(c, "user", voice and "[Voice] Listening..." or text, id)
 	-- A chat still carrying its default name takes its title from the first message
 	-- you send (system notes like "/wow-claude cd" before it don't count).
-	if c.name:match("^Chat %d+$") then
+	if not voice and c.name:match("^Chat %d+$") then
 		local first = true
 		for _, m in ipairs(c.history) do
 			if m.role == "user" and m.id ~= id then first = false break end
@@ -1149,6 +1205,21 @@ function WoWClaude.Send(text, allow)
 	else
 		SafeReload()
 	end
+end
+
+function WoWClaude.StartVoice()
+	local c = ActiveChat()
+	if not c then return end
+	if c.pendingId then
+		if c.voicePending then
+			AddHistory(c, "system", "Listening is already active. Use Cancel in the desktop companion if needed.")
+			WoWClaude.Render()
+		else
+			WoWClaude.Send("")
+		end
+		return
+	end
+	WoWClaude.Send("[Voice] Listening...", nil, true)
 end
 
 -- Forget: a record with no text telling the bridge a chat was deleted, so it drops
@@ -1185,7 +1256,7 @@ function WoWClaude.SayHello()
 	db.lastSeq = db.lastSeq + 1
 	local c = ActiveChat()
 	local ctx = db.settings.context and WoWClaude.GameContext() or ""
-	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "h", name = c and c.name or "", text = "", ctx = ctx, sentAt = now, hello = true }
+	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "h;vol=" .. db.settings.voiceVolume, name = c and c.name or "", text = "", ctx = ctx, sentAt = now, hello = true }
 	run.helloPollAt = now + 5
 	-- Deletions the bridge never confirmed ride along with the hello.
 	for id in pairs(db.forget) do SendForget(id) end
@@ -1199,6 +1270,44 @@ function WoWClaude.SayHello()
 	end
 	RefreshStrip()
 	WoWClaude.Render()
+end
+
+local volumeSendGeneration = 0
+
+function WoWClaude.SendVolume()
+	if not db or db.settings.mode ~= "pixel" then return end
+	local c = ActiveChat()
+	db.lastSeq = db.lastSeq + 1
+	run.outbound[db.lastSeq] = {
+		chat = c and c.id or "",
+		cwd = c and c.cwd or "",
+		flags = "vol=" .. db.settings.voiceVolume,
+		name = c and c.name or "",
+		text = "",
+		sentAt = GetTime(),
+	}
+	RefreshStrip()
+end
+
+function WoWClaude.SetVolume(value, immediate)
+	value = math.max(0, math.min(200, math.floor((tonumber(value) or db.settings.voiceVolume or 125) + 0.5)))
+	db.settings.voiceVolume = value
+	if ui.volumeLabel then ui.volumeLabel:SetText("Voice volume: " .. value .. "%") end
+	if ui.volume and ui.volume.GetValue and math.floor((ui.volume:GetValue() or 0) + 0.5) ~= value then
+		ui.settingVolume = true
+		ui.volume:SetValue(value)
+		ui.settingVolume = nil
+	end
+	volumeSendGeneration = volumeSendGeneration + 1
+	local generation = volumeSendGeneration
+	if immediate then
+		WoWClaude.SendVolume()
+	else
+		C_Timer.After(0.4, function()
+			if generation == volumeSendGeneration then WoWClaude.SendVolume() end
+		end)
+	end
+	return value
 end
 
 -- Put the active chat's pending message back on the strip.
@@ -1286,7 +1395,7 @@ function WoWClaude.SetFolder(rest, c)
 		c.cwd = rest
 		local absolute = rest:match("^%a:[\\/]") or rest:match("^[\\/~]")
 		local note = absolute and "" or (" (relative to " .. base .. ")")
-		AddHistory(c, "system", "cwd set to " .. rest .. note .. (changed and #c.history > 1 and "; the next message starts a fresh Claude session there" or ""))
+		AddHistory(c, "system", "cwd set to " .. rest .. note .. (changed and #c.history > 1 and "; the next message starts a fresh guide conversation there" or ""))
 	elseif c.cwd ~= "" then
 		c.cwd = ""
 		AddHistory(c, "system", "cwd reset to the bridge's default: " .. base)
@@ -1297,7 +1406,7 @@ function WoWClaude.SetFolder(rest, c)
 end
 
 StaticPopupDialogs["WOWCLAUDE_FOLDER"] = {
-	text = "Folder for this chat\n\nRelative to the bridge's folder (%s), ~, or a full path.\nEmpty = the bridge's default. Changing it starts a fresh Claude session.",
+	text = "Folder for this chat\n\nRelative to the bridge's folder (%s), ~, or a full path.\nEmpty = the bridge's default. Changing it starts a fresh guide conversation.",
 	button1 = OKAY,
 	button2 = CANCEL,
 	hasEditBox = 1,
@@ -1445,7 +1554,7 @@ function WoWClaude.UpdateStatus()
 			elseif run.pixelFailed then
 				s = "Bridge didn't see #" .. id .. " after " .. STRIP_TRIES .. " tries - next keypress switches to the reload path (or /wow-claude reload)"
 			elseif c.progress or (run.act and run.act[c.id] and run.act[c.id].count > 0) then
-				s = "Claude is working on #" .. id .. " - " .. ActivityLine(c)
+				s = "The guide is working on #" .. id .. " - " .. ActivityLine(c)
 			elseif rec and not rec.acked then
 				s = "Sending #" .. id .. (rec.tries and rec.tries > 1 and (" (try " .. rec.tries .. "/" .. STRIP_TRIES .. ")") or "") .. "..."
 				local state = WoWClaude.BridgeState()
@@ -1486,7 +1595,7 @@ function WoWClaude.UpdateStatus()
 	WoWClaude.UpdateDot()
 	WoWClaude.UpdateConnect()
 	if ui.title then
-		local t = c and Display(c.name) or "Claude"
+		local t = c and Display(c.name) or "Voice Guide"
 		local folder = FolderName(ChatFolder(c))
 		if folder ~= "" then t = t .. "  |cff888888" .. Display(folder) .. "|r" end
 		ui.title:SetText(t)
@@ -1534,6 +1643,10 @@ local function GetBubble(i)
 		WoWClaude.Allow(self.chatId, self.rules)
 	end)
 	b.allow:Hide()
+	b.waypoint = CreateFrame("Button", nil, b, "UIPanelButtonTemplate")
+	b.waypoint:SetHeight(22)
+	b.waypoint:SetScript("OnClick", function(self) WoWClaude.SetWaypoint(self.point) end)
+	b.waypoint:Hide()
 	-- FontStrings can't be selected, so a click opens the message in the copy box.
 	b:EnableMouse(true)
 	b:SetScript("OnMouseUp", function(self, button)
@@ -1550,7 +1663,7 @@ function WoWClaude.Render()
 		if not width or width < 80 then width = 400 end
 		ui.content:SetWidth(width)
 		local y, n = 0, 0
-		local function Place(role, text, when, dim, denied)
+		local function Place(role, text, when, dim, denied, waypoint)
 			n = n + 1
 			local b = GetBubble(n)
 			local st = ROLE_STYLE[role] or ROLE_STYLE.system
@@ -1581,6 +1694,17 @@ function WoWClaude.Render()
 			else
 				b.allow:Hide()
 			end
+			if type(waypoint) == "table" then
+				b.waypoint:ClearAllPoints()
+				b.waypoint:SetPoint("TOPLEFT", b.body, "BOTTOMLEFT", 0, -6 - extra)
+				b.waypoint:SetText("Set waypoint" .. ((waypoint.label and waypoint.label ~= "") and (": " .. Display(waypoint.label)) or ""))
+				b.waypoint:SetWidth(math.min(width - 24, 260))
+				b.waypoint.point = waypoint
+				b.waypoint:Show()
+				extra = extra + 28
+			else
+				b.waypoint:Hide()
+			end
 			b:SetHeight(6 + 12 + 4 + h + 8 + extra)
 			b:ClearAllPoints()
 			b:SetPoint("TOPLEFT", ui.content, "TOPLEFT", 0, -y)
@@ -1592,11 +1716,11 @@ function WoWClaude.Render()
 		for i, m in ipairs(c.history) do
 			-- The Allow button only makes sense on the newest reply, and only while idle.
 			local denied = (i == last and not c.pendingId and type(m.denied) == "table" and #m.denied > 0) and m.denied or nil
-			Place(m.role, m.text, m.t and date("%H:%M", m.t) or "", false, denied)
+			Place(m.role, m.text, m.t and date("%H:%M", m.t) or "", false, denied, m.waypoint)
 		end
 		if c.pendingId then
 			local p = c.progress
-			local head = "working... " .. ActivityLine(c)
+			local head = (c.voicePending and "listening / processing... " or "working... ") .. ActivityLine(c)
 			if run.statusText and run.statusText ~= "" then head = head .. "\n" .. run.statusText end
 			Place("claude", (p and p ~= "") and (head .. "\n\n" .. p) or head, "", true)
 		elseif #c.history == 0 then
@@ -1731,7 +1855,7 @@ end
 local function EchoToChat(chat, text)
 	local mode = db.settings.echo
 	if mode == "off" then return end
-	local prefix = "|cff7ec8ff[Claude · " .. Display(chat.name) .. "]|r "
+	local prefix = "|cff7ec8ff[Voice Guide · " .. Display(chat.name) .. "]|r "
 	local body = Display(text)
 	if mode == "short" then
 		local flat = (body:gsub("%s+", " "))
@@ -1766,7 +1890,7 @@ function WoWClaude.Notify(chat, text)
 	EchoToChat(chat, text)
 	if ui.frame and ui.frame:IsShown() and db.activeChat == chat.id then return end
 	if UIErrorsFrame then
-		UIErrorsFrame:AddMessage("Claude replied in " .. Display(chat.name), 0.5, 0.8, 1, 1)
+		UIErrorsFrame:AddMessage("Voice Guide replied in " .. Display(chat.name), 0.5, 0.8, 1, 1)
 	end
 end
 
@@ -1787,7 +1911,7 @@ local function PaintClaudeHeader(eb, chat)
 	eb:UpdateHeader() -- lay out normally first, then repaint
 	eb.claudePainting = nil
 	header:SetWidth(0)
-	header:SetText("To Claude [" .. Display(chat.name) .. "]: ")
+	header:SetText("To Voice Guide [" .. Display(chat.name) .. "]: ")
 	header:SetTextColor(CLAUDE_R, CLAUDE_G, CLAUDE_B)
 	if suffix then suffix:Hide() end
 	eb:SetTextInsets(15 + header:GetWidth(), 13, 0, 0)
@@ -1957,7 +2081,7 @@ local function BuildUI()
 
 	local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	title:SetPoint("LEFT", dotHolder, "RIGHT", 6, 0)
-	title:SetText("WoW Claude")
+	title:SetText("WoW Voice Guide")
 	ui.title = title
 
 	local status = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -1992,7 +2116,7 @@ local function BuildUI()
 	mini:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 		GameTooltip:SetText("Minimize to the small bar  (Esc)")
-		GameTooltip:AddLine("Claude keeps working; the bar shows when a reply lands.", 0.8, 0.8, 0.8, true)
+		GameTooltip:AddLine("The guide keeps working; the bar shows when a reply lands.", 0.8, 0.8, 0.8, true)
 		GameTooltip:Show()
 	end)
 	mini:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -2172,10 +2296,12 @@ local function BuildUI()
 	end)
 
 	-- Input box, with Send docked at its right end like a messaging app.
-	local SEND_W = 84
+	local SEND_W = 72
+	local TALK_W = 88
+	local ACTIONS_W = SEND_W + TALK_W + 6
 	local inputBg = CreateFrame("Frame", nil, f, "BackdropTemplate")
 	inputBg:SetPoint("BOTTOMLEFT", panel, "BOTTOMRIGHT", 8, 0)
-	inputBg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14 - SEND_W - 6, 50)
+	inputBg:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14 - ACTIONS_W - 6, 50)
 	inputBg:SetHeight(54)
 	inputBg:SetBackdrop({
 		bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
@@ -2211,14 +2337,26 @@ local function BuildUI()
 	send:SetPoint("LEFT", inputBg, "RIGHT", 6, 0)
 	ui.send = send
 
+	local talk = MakeButton(f, "Talk", TALK_W, WoWClaude.StartVoice)
+	talk:SetHeight(30)
+	talk:SetPoint("LEFT", send, "RIGHT", 6, 0)
+	talk:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Talk to the guide")
+		GameTooltip:AddLine("Press once and speak. Listening stops automatically when Flux detects that you are finished.", 0.8, 0.8, 0.8, true)
+		GameTooltip:Show()
+	end)
+	talk:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	ui.talk = talk
+
 	-- Connect stands in for Send until the bridge has been seen (see UpdateConnect).
-	local connect = MakeButton(f, "Connect", SEND_W, WoWClaude.Connect)
+	local connect = MakeButton(f, "Connect", ACTIONS_W, WoWClaude.Connect)
 	connect:SetHeight(30)
 	connect:SetPoint("LEFT", inputBg, "RIGHT", 6, 0)
 	connect:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:SetText("Connect to the bridge")
-		GameTooltip:AddLine("The bridge must be running on this PC (npm start in wow-claude, or wow-claude in your project). The light turns green once it answers.", 0.8, 0.8, 0.8, true)
+		GameTooltip:AddLine("The WoW Voice Guide companion must be running on this PC. The light turns green once it answers.", 0.8, 0.8, 0.8, true)
 		GameTooltip:Show()
 	end)
 	connect:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -2246,6 +2384,34 @@ local function BuildUI()
 	resend:Hide()
 	ui.resend = resend
 
+	-- Fish Audio is played by the desktop companion. This slider sends the saved
+	-- percentage over the same pixel bridge; values above 100% use companion-side
+	-- gain with a limiter so quiet character voices can be made easier to hear.
+	local volume = CreateFrame("Slider", "WoWVoiceGuideVolumeSlider", f, "OptionsSliderTemplate")
+	volume:SetSize(130, 16)
+	volume:SetPoint("LEFT", resend, "RIGHT", 24, 0)
+	volume:SetMinMaxValues(0, 200)
+	volume:SetValueStep(5)
+	if volume.SetObeyStepOnDrag then volume:SetObeyStepOnDrag(true) end
+	local volumeLabel = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	volumeLabel:SetPoint("BOTTOM", volume, "TOP", 0, 1)
+	ui.volume = volume
+	ui.volumeLabel = volumeLabel
+	volume:SetScript("OnValueChanged", function(_, value)
+		if not ui.settingVolume then WoWClaude.SetVolume(value) end
+	end)
+	volume:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Voice volume")
+		GameTooltip:AddLine("0-100% is normal playback volume. 105-200% amplifies quiet Fish Audio voices with clipping protection.", 0.8, 0.8, 0.8, true)
+		GameTooltip:Show()
+	end)
+	volume:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	ui.settingVolume = true
+	volume:SetValue(s.voiceVolume)
+	ui.settingVolume = nil
+	volumeLabel:SetText("Voice volume: " .. s.voiceVolume .. "%")
+
 	-- A named, always-present button so a keybinding can click it (see /wow-claude bind).
 	local hotkey = CreateFrame("Button", "WoWClaudeRefreshButton", UIParent)
 	hotkey:SetSize(1, 1)
@@ -2258,6 +2424,14 @@ local function BuildUI()
 			WoWClaude.Toggle()
 		end
 	end)
+
+	-- Dedicated voice action for both Bindings.xml and `/wow-claude bind <key>`.
+	-- It is independent of the guide window, so the window may stay hidden while
+	-- the player quests or fights.
+	local talkHotkey = CreateFrame("Button", "WoWVoiceGuideTalkButton", UIParent)
+	talkHotkey:SetSize(1, 1)
+	talkHotkey:SetPoint("TOPLEFT", UIParent, "TOPLEFT", -12, 10)
+	talkHotkey:SetScript("OnClick", WoWClaude.StartVoice)
 
 	local cwd = f:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	cwd:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 16, 4)
@@ -2319,7 +2493,7 @@ local function BuildUI()
 
 	local mlabel = m:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	mlabel:SetPoint("LEFT", miniDotHolder, "RIGHT", 6, 0)
-	mlabel:SetText("WoW Claude")
+	mlabel:SetText("Voice Guide")
 
 	local badge = m:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 	badge:SetPoint("LEFT", mlabel, "RIGHT", 8, 0)
@@ -2398,34 +2572,40 @@ end
 ---------------------------------------------------------------------------
 
 local HELP = table.concat({
+	"/voice                             press once to start talking; Flux stops automatically",
+	"/voice-guide                       toggle the Voice Guide window",
 	"/wow-claude                        toggle the window (/claude works too)",
 	"/wow-claude mini                   collapse to the small bar (click the bar to expand)",
 	"/wow-claude hide                   hide the window completely",
 	"/ai <text>                         send <text> to the current chat straight from the game chat box",
-	"/r <text>                          replies to Claude when Claude was the last to message you (else normal whisper reply)",
+	"/r <text>                          replies to the guide when it was the last to message you (else normal whisper reply)",
 	"/wow-claude <text>                 same as /ai",
 	"/wow-claude echo full|short|off|<chars>   how much of each reply to print in the game chat",
 	"/wow-claude longchat on|off        let the game chat box take 4000 characters (for long /ai messages)",
-	"/wow-claude new [name]             start a new chat (its own Claude session, like a new terminal)",
+	"/wow-claude new [name]             start a new guide conversation",
 	"/wow-claude chat <n|name>          switch chats (or click one in the left panel)",
 	"/wow-claude rename [name]          rename the current chat (no name = dialog; right-clicking the chat in the left panel offers it too)",
 	"/wow-claude delete                 delete the current chat",
-	"/wow-claude cd <folder>            folder this chat's Claude works in (relative to the bridge's folder; no folder = back to default). Right-clicking the chat in the left panel and picking Folder does the same",
-	"/wow-claude reset                  next message in this chat starts a fresh Claude session",
-	"/wow-claude context [on|off]       what Claude is told about your character and where you are (no argument = show it)",
+	"/wow-claude cd <folder>            compatibility work folder for this chat (normally leave it at default)",
+	"/wow-claude reset                  next message starts a fresh guide conversation",
+	"/wow-claude context [on|off]       what the guide is told about your character and location",
 	"/wow-claude mode pixel             no-reload transport (default)",
 	"/wow-claude mode reload            fallback transport: a /reload per step",
 	"/wow-claude resend                 show the strip again if the bridge missed it",
 	"/wow-claude reload                 reload now (also frees the slot pool)",
 	"/wow-claude cancel                 stop waiting on this chat's reply",
 	"/wow-claude copy                   open the last reply in a selectable box for Ctrl+C",
-	"/wow-claude bind <key>             hotkey: checks for a reply while waiting, else toggles the window",
+	"/wow-claude bind <key>             bind Talk directly (example: /wow-claude bind F8)",
+	"/wow-claude volume <0-200>         set spoken reply volume (100 = normal, 125 = boosted)",
 	"/wow-claude auto on|off            reload-mode only: auto-reload on your next keypress after the interval",
 	"/wow-claude signal on|off          the cheap sound-file readiness check (off if it spams errors)",
 	"/wow-claude slots                  how many reply slots are still free this session",
 	"/wow-claude diag                   transport diagnostics (is the cheap sound-file channel working?)",
 	"/wow-claude clear                  clear this chat's transcript",
 }, "\n")
+
+SLASH_WOWVOICETALK1 = "/voice"
+SlashCmdList["WOWVOICETALK"] = function() WoWClaude.StartVoice() end
 
 -- /ai <text>: send straight from the game chat box (like /r, but for Claude).
 SLASH_CLAUDEASK1 = "/ai"
@@ -2447,6 +2627,7 @@ end
 
 SLASH_WOWCLAUDE1 = "/wow-claude"
 SLASH_WOWCLAUDE2 = "/claude"
+SLASH_WOWCLAUDE3 = "/voice-guide"
 SlashCmdList["WOWCLAUDE"] = function(msg)
 	msg = Trim(msg or "")
 	local cmd, rest = msg:match("^(%S+)%s*(.-)$")
@@ -2494,7 +2675,7 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 		WoWClaude.Toggle(true)
 	elseif cmd == "reset" then
 		c.resetNext = true
-		AddHistory(c, "system", "Next message starts a fresh Claude session in " .. c.cwd)
+		AddHistory(c, "system", "Next message starts a fresh guide conversation in " .. c.cwd)
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)
 	elseif cmd == "context" or cmd == "ctx" then
@@ -2508,9 +2689,9 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 		end
 		local ctx = WoWClaude.GameContext()
 		AddHistory(c, "system", (s.context
-			and "Game context is ON: Claude is told this with each message (it goes into its system prompt, so unrelated projects are unaffected by anything but a few lines). /wow-claude context off to stop.\n\n"
-			or "Game context is OFF: Claude is told nothing about the game. /wow-claude context on to send this:\n\n") .. ctx
-			.. "\n\nTip: click the input box, then shift-click an item, spell or quest to link it into your message; Claude gets its tooltip.")
+			and "Game context is ON: the guide receives this with each changed situation. /wow-claude context off to stop.\n\n"
+			or "Game context is OFF: the guide receives no character or location data. /wow-claude context on to send this:\n\n") .. ctx
+			.. "\n\nTip: click the input box, then shift-click an item, spell or quest to attach its tooltip to your question.")
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)
 	elseif cmd == "mode" then
@@ -2575,9 +2756,19 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 	elseif cmd == "bind" then
 		local key = rest:upper()
 		if key ~= "" and not InCombatLockdown() then
-			SetBinding(key, "CLICK WoWClaudeRefreshButton:LeftButton")
+			SetBinding(key, "CLICK WoWVoiceGuideTalkButton:LeftButton")
 			SaveBindings(GetCurrentBindingSet())
-			AddHistory(c, "system", key .. " is now bound: checks for a reply while waiting, otherwise toggles this window")
+			AddHistory(c, "system", key .. " now starts Voice Guide listening. You can also change it under Key Bindings > AddOns > WoW Voice Guide.")
+		end
+		WoWClaude.Render()
+		WoWClaude.Toggle(true)
+	elseif cmd == "volume" or cmd == "vol" then
+		local value = tonumber(rest)
+		if value then
+			value = WoWClaude.SetVolume(value, true)
+			AddHistory(c, "system", "Voice volume set to " .. value .. "%.")
+		else
+			AddHistory(c, "system", "Voice volume is " .. s.voiceVolume .. "%. Use /wow-claude volume 0-200.")
 		end
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)

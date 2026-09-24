@@ -6,6 +6,20 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ### Added
 
+- WoW Voice Guide desktop companion with microphone capture, Deepgram Flux automatic end-of-turn, configurable non-Claude guide models, and Fish Audio WAV playback.
+- One-press **Talk** button and `/voice`, live listening/thinking/speaking state, transcript replacement, active-quest/objective context, and optional player-clicked waypoints.
+- GPT-6 Luna, GPT-4.1 Mini, hosted Gemma 4 26B A4B/31B, and local OpenAI-compatible presets.
+- Provider, PCM, voice-protocol, and waypoint tests.
+- In-game Talk keybind and playback volume controls (0–200%), with companion-side amplification and limiting.
+
+### Changed
+
+- Player-facing branding is WoW Voice Guide. Internal `WoWClaude` identifiers remain for upstream transport and SavedVariables compatibility.
+- Claude Code execution and tool-permission handling were replaced by the voice-guide provider pipeline.
+- Fish `s2.1-pro-free` is the source-build default TTS model. The example voice is the public Warcraft 3 Peon model and may be changed in companion settings.
+
+### Upstream history
+
 - Claude is told which game and client you are on, your character (name, realm, level, race, class, faction, guild), zone and map coordinates, money, talents and professions. The addon sends these few lines with its hello and again when they change (a `c` flag and an extra field in the strip record), the bridge keeps the latest in `state.json` and passes it to every run with `--append-system-prompt`. `/wow-claude context` shows it, `/wow-claude context off` stops it (and clears the bridge's copy), `"gameContext": false` in `config.json` disables it on the bridge side.
 - `docs/WOW-ADDON-PRIMER.md`, a short reference on writing addons and macros for the Forever client, goes into the system prompt with the game context on every run, whatever folder the chat works in. `primerFile` in `config.json` points elsewhere or (`""`) drops it; edits are picked up without a restart.
 - Shift-click an item, spell, quest or name while the addon's input box has focus to link it into the message, as in the game chat (hooked on `ChatFrameUtil.InsertLink`, the modern chat code the Forever client runs; the old `ChatEdit_InsertLink` global is used only where that is missing). On send, each link becomes `[Name]` in the text and its tooltip is appended in a "Linked from the game" block, so Claude can read an item's stats or a spell's description. Links typed in the game chat (`/ai … [item]`) get the same treatment.
@@ -42,5 +56,5 @@ First public release.
 - `setup.js` installer: finds the client, copies the addon, writes `config.json`, builds the slot pool.
 - Test suite: addon in a Lua VM with a stub client, protocol unit tests, slot-file round trip, codec-to-decoder round trip, and a live inject test.
 
-[Unreleased]: https://github.com/chelinho139/wow-claude/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Griffden/wow-voice-guide/commits/main/
 [0.3.0]: https://github.com/chelinho139/wow-claude/releases/tag/v0.3.0

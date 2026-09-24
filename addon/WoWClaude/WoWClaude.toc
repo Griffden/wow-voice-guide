@@ -1,8 +1,8 @@
 ## Interface: 16001
-## Title: WoW Claude
-## Notes: Talk to your local Claude Code sessions from inside the game. Needs the companion bridge (see README).
-## Author: chelinho139
-## Version: 0.3.0
+## Title: WoW Voice Guide
+## Notes: Press Talk and get spoken in-game guidance through Fish Audio. Requires the desktop companion.
+## Author: WoW Voice Guide contributors; transport by chelinho139
+## Version: 0.1.0
 ## SavedVariables: WoWClaudeDB
 
 Codec.lua

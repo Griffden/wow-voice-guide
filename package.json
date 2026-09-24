@@ -1,36 +1,62 @@
 {
-  "name": "wow-claude",
-  "version": "0.3.0",
+  "name": "wow-voice-guide",
+  "version": "0.1.0",
   "private": true,
-  "description": "Chat with local Claude Code sessions from inside World of Warcraft: Forever, with no UI reloads. Pixel strip out, load-on-demand slots in.",
+  "description": "Press once and talk to a voice quest guide inside World of Warcraft: Forever. Deepgram Flux in, Fish Audio out.",
   "license": "MIT",
-  "author": "chelinho139",
+  "author": "WoW Voice Guide contributors; transport based on wow-claude by chelinho139",
   "repository": {
     "type": "git",
-    "url": "https://github.com/chelinho139/wow-claude"
+    "url": "https://github.com/Griffden/wow-voice-guide"
   },
   "keywords": [
     "world-of-warcraft",
     "wow-addon",
-    "claude-code",
-    "claude",
+    "voice-assistant",
+    "fish-audio",
+    "deepgram",
     "bridge"
   ],
   "engines": {
-    "node": ">=22.2"
+    "node": ">=22.12"
   },
-  "bin": {
-    "wow-claude": "bridge/supervisor.js"
-  },
+  "main": "bridge/desktop.js",
   "scripts": {
     "setup": "node setup.js",
-    "start": "node bridge/supervisor.js",
+    "start": "electron .",
+    "bridge": "node bridge/supervisor.js",
     "slots": "node bridge/install-slots.js",
-    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/restore_test.js tests/addon_test.js && node tests/codec_test.js",
-    "test:live": "node tests/inject_test.js"
+    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/restore_test.js tests/addon_test.js tests/providers_test.js tests/audio_utils_test.js && node tests/codec_test.js",
+    "test:live": "node tests/inject_test.js",
+    "dist": "electron-builder --win nsis portable"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
   },
   "devDependencies": {
+    "electron": "^44.4.5",
+    "electron-builder": "^26.0.12",
     "fengari": "^0.1.4",
     "luaparse": "^0.3.1"
+  },
+  "build": {
+    "appId": "com.wowvoiceguide.companion",
+    "productName": "WoW Voice Guide",
+    "files": [
+      "bridge/**/*",
+      "docs/**/*",
+      "package.json",
+      "LICENSE"
+    ],
+    "asarUnpack": [
+      "bridge/capture.ps1"
+    ],
+    "win": {
+      "target": ["nsis", "portable"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

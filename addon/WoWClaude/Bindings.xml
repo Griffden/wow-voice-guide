@@ -1,0 +1,5 @@
+<Bindings>
+  <Binding name="WOWVOICEGUIDE_TALK" category="ADDONS" header="WOWVOICEGUIDE">
+    WoWClaude.StartVoice()
+  </Binding>
+</Bindings>
