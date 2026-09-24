@@ -1,6 +1,6 @@
 # WoW Voice Guide
 
-[▶ Watch the WoW Voice Guide demo](demo/wow-voice-guide-demo.mp4)
+[▶ Watch or download the WoW Voice Guide demo](https://github.com/Griffden/wow-voice-guide/raw/refs/heads/main/demo/wow-voice-guide-demo.mp4)
 
 Press **Talk** once inside World of Warcraft: Forever, speak naturally, stop speaking, and hear the answer in a selected Fish Audio voice. The transcript and answer also appear in the in-game window.
 
