@@ -1,6 +1,6 @@
 # WoW Voice Guide
 
-[▶ Watch or download the WoW Voice Guide demo](https://github.com/Griffden/wow-voice-guide/raw/refs/heads/main/demo/wow-voice-guide-demo.mp4)
+![WoW Voice Guide desktop companion](demo/voice-guide-companion.png)
 
 **A voice-first player guide for World of Warcraft: Forever.** Press **Talk** (or your bound key) once, ask a question, stop speaking, and hear the answer in a selected Fish Audio voice. Your transcript and the answer also appear in game. You do not need to say “Forever” in every question: the guide treats WoW questions as being about **WoW: Forever** unless you explicitly ask about another version.
 
