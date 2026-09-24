@@ -50,6 +50,8 @@ The example configuration preselects the public [Warcraft 3 Peon voice on Fish A
 ## Install from source
 
 ```powershell
+git clone https://github.com/Griffden/wow-voice-guide.git
+cd wow-voice-guide
 npm install
 node setup.js --wow "C:\path\to\World of Warcraft\_classic_beta_"
 npm start
@@ -64,7 +66,7 @@ In the companion settings:
 3. Paste the Fish Audio API key. The Peon voice is preselected; replace its model ID if you want another voice.
 4. Save. The bridge restarts automatically.
 
-In game, enable **WoW Voice Guide**, type `/voice-guide`, then press **Talk**. The standalone `/voice` command starts listening immediately. The companion's **Finish now** control forces the current turn to end; **Cancel listening** abandons it. The in-game **Voice volume** slider ranges from 0–200%; `/wow-claude volume 150` sets the same value directly. Values above 100% use companion-side amplification with clipping protection.
+In game, enable **WoW Voice Guide**, type `/voice-guide`, then press **Talk**. You can also bind a key in the game's Key Bindings menu or use `/wow-claude bind F8` (replace `F8` with your preferred key); pressing it starts listening without opening the window. The standalone `/voice` command starts listening immediately. The companion's **Finish now** control forces the current turn to end; **Cancel listening** abandons it. The in-game **Voice volume** slider ranges from 0–200%; `/wow-claude volume 150` sets the same value directly. Values above 100% use companion-side amplification with clipping protection.
 
 Typed chat remains available as a fallback. Fish only speaks voice-originated questions by default; set `fish.speakTyped` to `true` in `bridge/config.json` to speak typed answers too.
 
