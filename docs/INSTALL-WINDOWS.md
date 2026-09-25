@@ -67,7 +67,7 @@ In game:
 
 **A reply says a folder does not exist.** `defaultCwd` is inherited from the upstream project-oriented bridge but is not important to voice answers. Point it at any existing local folder.
 
-**The answer is wrong about an exact quest location.** Quest questions use indexed web results and show source links, but those results may be outdated or from a different WoW edition. The app has no authoritative Forever quest-location database. Do not trust guessed coordinates; the prompt asks the guide to omit a waypoint when it lacks grounded data.
+**The answer is wrong about an exact quest location.** Quest questions use live web search and show source links, but those results may be outdated or from a different WoW edition. The app has no authoritative Forever quest-location database. Do not trust guessed coordinates; the prompt asks the guide to omit a waypoint when it lacks grounded data.
 
 **Quest web lookup says it needs an OpenAI key.** Choose an OpenAI brain preset and save its API key in companion Settings. This first player-guide version does not use the Gemini or local-model key for web search.
 

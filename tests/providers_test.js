@@ -102,7 +102,7 @@ test('quest lookup routes only research questions and returns cited guidance', a
       { role: 'claude', text: 'A previous mistaken NPC location' },
     ] });
     assert.equal(request.url, 'https://api.openai.com/v1/responses');
-    assert.deepEqual(request.body.tools, [{ type: 'web_search', external_web_access: false }]);
+    assert.deepEqual(request.body.tools, [{ type: 'web_search', external_web_access: true }]);
     assert.equal(request.body.tool_choice, 'required');
     assert.match(request.body.instructions, /World of Warcraft: Forever/);
     assert.match(request.body.instructions, /do not recycle those steps/);
@@ -112,6 +112,50 @@ test('quest lookup routes only research questions and returns cited guidance', a
     assert.match(answer.display, /https:\/\/example\.com\/forever\/quest=94946/);
     assert.match(answer.display, /wowhead\.com\/forever\/quest=94946/);
     assert.deepEqual(answer.sources, [{ title: 'WoW Forever quest notes', url: 'https://example.com/forever/quest=94946' }]);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('a broad cited Forever guide is accepted when search also found the exact quest', async () => {
+  const originalFetch = global.fetch;
+  let request;
+  global.fetch = async (_url, init) => {
+    request = JSON.parse(init.body);
+    return new Response(JSON.stringify({ output: [
+      { type: 'web_search_call', action: { type: 'search', sources: [
+        { url: 'https://www.wowhead.com/forever/quest%3D1861/mirror-lake' },
+      ] } },
+      { type: 'message', content: [{ type: 'output_text', text: 'Use the flask at the lake waterfall.', annotations: [
+        { type: 'url_citation', title: 'WoW Forever Human levelling guide', url: 'https://www.foreverwisp.com/guides/wow-forever-human-leveling-guide' },
+      ] }] },
+    ] }), { status: 200 });
+  };
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Selected quest: An Unrelated Quest (id 90001)',
+      text: 'Where is the Mirror Lake water sample for the Mirror Lake quest in WoW Forever?',
+    });
+    assert.doesNotMatch(request.input, /Focused quest:/, 'an unrelated tracked quest must not be substituted');
+    assert.match(answer.speech, /lake waterfall/);
+    assert.equal(answer.sources.length, 1);
+    assert.equal(answer.lookup.topicSearchMatch, true);
+    assert.doesNotMatch(answer.display, /quest=90001/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('mentioning Classic or Forever keeps the current Forever edition', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'Take the boat to Rut\'theran Village.', annotations: [
+      { type: 'url_citation', title: 'WoW Forever travel from Darnassus to Auberdine', url: 'https://example.com/forever/darnassus-auberdine' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'In WoW Classic or WoW Forever, how do I travel from Darnassus to Auberdine?',
+    });
+    assert.equal(answer.lookup.edition, 'forever');
+    assert.match(answer.speech, /Rut'theran Village/);
   } finally { global.fetch = originalFetch; }
 });
 
@@ -152,6 +196,23 @@ test('an explicitly requested different edition is not treated as Forever', asyn
     assert.equal(answer.speech, 'Classic-specific answer.');
     assert.equal(answer.sources.length, 1);
     assert.doesNotMatch(answer.display, /wowhead\.com\/forever/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('an explicit not-Forever correction selects Classic', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'Classic route.', annotations: [
+      { type: 'url_citation', title: 'WoW Classic Mirror Lake', url: 'https://example.com/classic/mirror-lake' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'I mean WoW Classic, not Forever: where is Mirror Lake?',
+    });
+    assert.equal(answer.lookup.edition, 'classic');
+    assert.equal(answer.speech, 'Classic route.');
   } finally { global.fetch = originalFetch; }
 });
 

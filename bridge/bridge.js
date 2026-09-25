@@ -443,6 +443,7 @@ async function runAssistantJob(job, text) {
     const research = cfg.playerGuide !== false && Providers.shouldResearchQuest(job.text, input.context);
     if (research && process.send) process.send({ type: 'status', status: { state: 'thinking', text: 'Looking up quest guidance…' } });
     const answer = research ? await Providers.requestPlayerGuide(cfg, input) : await Providers.requestAssistant(cfg, input);
+    if (answer.lookup) log(`${tag} guide lookup: edition=${answer.lookup.edition}, citations=${answer.lookup.citations}, verified=${answer.lookup.verified}, topicSearchMatch=${answer.lookup.topicSearchMatch}`);
     if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources, quest: answer.quest });
     let speechError = '';
     let audioStarted = false;
