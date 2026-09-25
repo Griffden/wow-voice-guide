@@ -26,7 +26,8 @@
     "start": "electron .",
     "bridge": "node bridge/supervisor.js",
     "slots": "node bridge/install-slots.js",
-    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/bridge_job_test.js tests/restore_test.js tests/addon_test.js tests/providers_test.js tests/guide_test.js tests/wowdata_test.js tests/gamestate_test.js tests/audio_utils_test.js tests/voice_presets_test.js && node tests/codec_test.js",
+    "build:quests": "node tools/build-quest-db.js",
+    "test": "node tests/order_check.js && node --test tests/bridge_test.js tests/bridge_job_test.js tests/restore_test.js tests/addon_test.js tests/providers_test.js tests/guide_test.js tests/wowdata_test.js tests/gamestate_test.js tests/questdb_test.js tests/audio_utils_test.js tests/voice_presets_test.js && node tests/codec_test.js",
     "test:live": "node tests/inject_test.js",
     "dist": "electron-builder --win nsis portable"
   },

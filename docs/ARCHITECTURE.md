@@ -76,14 +76,19 @@ question + game context (character, zone, position, quest log with quest IDs)
   |      quests the question names, or the selected quest for "where do I go?"
   |      -> Wowhead Forever tooltip (objectives, turn-in) + search (quest text, level, zone)
   |
+  +-> 1b. "what should I do?" questions (every preset): the quests available
+  |       nearby, from the offline quest database (bridge/questdb.js)
+  |
   +-> 2a. OpenAI preset: tool-using guide (Responses API, store: false)
-  |        tools: wowhead_search(query)      name -> Forever quests/NPCs/items/spells/zones + ids
+  |        tools: quests_near_me(zone)       offline: quests to pick up here, nearest giver first
+  |               quest_info(quest)          offline: one quest's givers, coordinates, prerequisites
+  |               wowhead_search(query)      name -> Forever quests/NPCs/items/spells/zones + ids
   |               wowhead_lookup(type, id)   one entry; NPCs include zone + map coordinates
   |               web_search                 live web for guides, routes, list questions
   |        up to playerGuide.maxRounds model calls; the last one cannot call tools
   |
   +-> 2b. Gemini / local preset: one Chat Completions or generateContent call
-  |        with the step-1 quest notes in the system prompt
+  |        with the step-1 quest notes and nearby quests in the system prompt
   |
   +-> 3. label + sources + waypoint
 ```
@@ -132,6 +137,12 @@ Blizzard offers no web API for WoW: Forever during the beta. `bridge/wowdata.js`
 - `https://www.wowhead.com/forever/search/suggestions-template?q={name}`
 
 Responses are cached in memory for six hours (at most 500 entries) and each request times out after six seconds. Tool failures are returned to the model as `{ "error": ... }` so it can try another lookup or answer with a label. Wowhead's beta data is incomplete (some NPCs have no location), and a "which quests start here?" list can only be approximated from search and the web.
+
+### Offline quest database
+
+`bridge/data/forever-quests.json` (about 4,400 quests, 450 KB) is converted from the [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) Forever data (MIT) by `tools/build-quest-db.js` and ships with the companion, so it works offline. `tools/att-parser.js` reads ATT's Lua data files without running them: it applies ATT's `-- #if` preprocessor for the Forever target (tags `FOREVER`, `ANYCLASSIC`; `BEFORE`/`AFTER` against patch 1.60.1), evaluates timelines at 1.60.1, resolves `MAP.*` constants and keeps only map ids in the Forever client's `UiMap` table, and takes quest and NPC names from ATT's trailing comments. Quests from ATT's unreviewed `zzOLD` folder fill gaps and are marked unverified. See [bridge/data/README.md](../bridge/data/README.md) for the record format and attribution.
+
+`bridge/questdb.js` answers from it with the player's game state: level, race, class and faction from the `char` section, map and position from `loc`, active quests from `quests`, and completed quests from `done.*`. A quest is offered when its giver is on the player's map, it is not completed (unless repeatable) or already in the log, faction/race/class/level allow it, and its prerequisites are done (when the completed list is unknown, prerequisites are listed instead of checked). Results are sorted by straight-line map distance with an eight-point direction. Holiday quests are left out.
 
 ## Fish Audio
 

@@ -44,7 +44,7 @@ test('a quest from the log is looked up before the model runs, and the answer ci
     assert.match(prompt, /Wowhead Forever reference[\s\S]*Quest 1861 "Mirror Lake", level 10/);
     assert.match(prompt, /Bring a Mirror Lake sample to Jennea Cannon/);
     assert.match(prompt, /base of the waterfall/);
-    assert.deepEqual(net.requests[0].tools.map(t => t.name || t.type), ['web_search', 'wowhead_search', 'wowhead_lookup']);
+    assert.deepEqual(net.requests[0].tools.map(t => t.name || t.type), ['web_search', 'wowhead_search', 'wowhead_lookup', 'quests_near_me', 'quest_info']);
     assert.equal(net.requests[0].tool_choice, 'auto');
     assert.equal(net.requests[0].store, false);
     assert.match(net.requests[0].instructions, /instead of refusing/);

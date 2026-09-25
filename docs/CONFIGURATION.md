@@ -50,7 +50,8 @@ The local preset uses `http://127.0.0.1:1234/v1/chat/completions`, which matches
 Every question goes through two steps:
 
 1. **Quest-log lookup.** If the question names a quest in your log (matched loosely, since speech transcripts rarely match a title exactly), or asks "where do I go?" or "how do I finish this quest?" about the selected or tracked quest, the companion fetches that quest's objectives, turn-in, and quest text from the Wowhead WoW: Forever database and gives them to the model. This works with every brain preset.
-2. **Tool-using guide** (OpenAI preset and key). The model answers through OpenAI's Responses API and decides which lookups it needs: `wowhead_search` (find Forever quests, NPCs, items, spells, zones by name), `wowhead_lookup` (one entry by id, including NPC map coordinates), and live `web_search`. Small talk and questions your game context already answers use no tools. The companion status line shows each lookup as it happens.
+   If the question asks what to do or where to find quests ("what should I do?", "any quests around here?"), the quests you can pick up on your map, nearest giver first, are added from the offline Forever quest database (`bridge/data/forever-quests.json`). This also works with every preset and needs no network.
+2. **Tool-using guide** (OpenAI preset and key). The model answers through OpenAI's Responses API and decides which lookups it needs: `quests_near_me` and `quest_info` (the offline quest database: quests to pick up on a map, and one quest's givers with coordinates and prerequisites), `wowhead_search` (find Forever quests, NPCs, items, spells, zones by name), `wowhead_lookup` (one entry by id, including NPC map coordinates), and live `web_search`. Small talk and questions your game context already answers use no tools. The companion status line shows each lookup as it happens.
 
 Answers are labeled instead of withheld. The model reports what an answer rests on: your game context, Forever data, Classic information, or general knowledge. Classic and general answers start with a short spoken caveat, and a claimed Forever answer with nothing looked up is treated as general knowledge. Sources appear in game and as companion buttons. A waypoint button appears only for coordinates that came from a lookup or a cited page; when the answer names one looked-up NPC that has coordinates, the companion sets the waypoint up itself.
 
@@ -58,7 +59,7 @@ Wowhead has no official API. The companion uses the JSON endpoints behind Wowhea
 
 | Field | Default | Meaning |
 |---|---|---|
-| `playerGuide` | enabled | Set to `false` to turn off all lookups; questions then go straight to the brain preset |
+| `playerGuide` | enabled | Set to `false` to turn off all lookups (Wowhead, web, and the offline quest database); questions then go straight to the brain preset |
 | `playerGuide.model` | `gpt-6-luna` | Responses API model for the tool-using guide |
 | `playerGuide.reasoningEffort` | model default | Optional Responses API reasoning effort |
 | `playerGuide.maxRounds` | `4` | Model calls per question; the last one cannot call tools, so an answer always arrives |
