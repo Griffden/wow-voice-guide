@@ -652,3 +652,57 @@ function S.Gear()
 	if #items > 0 then table.insert(lines, Clean("Equipped: " .. table.concat(items, "; "), S.BUDGET.gear - 150)) end
 	return Fit(lines, S.BUDGET.gear), lowest, free, total
 end
+
+---------------------------------------------------------------------------
+-- Small reads for the spoken announcements (WoWClaude.lua decides when)
+---------------------------------------------------------------------------
+
+-- Free and total slots in the regular bags.
+function S.BagSpace()
+	local free, total = 0, 0
+	for bag = 0, 4 do
+		local slots = Try(C_Container and C_Container.GetContainerNumSlots, bag)
+		local n, family = Try(C_Container and C_Container.GetContainerNumFreeSlots, bag)
+		if type(slots) == "number" and slots > 0 and (family == nil or family == 0) then
+			total = total + slots
+			free = free + (type(n) == "number" and n or 0)
+		end
+	end
+	return free, total
+end
+
+-- The most worn equipped item: percent and slot name, or nil.
+function S.LowestDurability()
+	local lowest, where
+	for _, slot in ipairs(SLOTS) do
+		local cur, max = Try(GetInventoryItemDurability, slot[1])
+		if type(cur) == "number" and type(max) == "number" and max > 0 then
+			local pct = math.floor(cur / max * 100 + 0.5)
+			if not lowest or pct < lowest then lowest, where = pct, slot[2] end
+		end
+	end
+	return lowest, where
+end
+
+-- Names of the spells that become available at this level (to learn at the trainer).
+function S.LevelSpells(level)
+	local names = {}
+	local ids = Try(C_SpellBook and C_SpellBook.GetCurrentLevelSpells, level)
+	if type(ids) == "table" then
+		for _, id in ipairs(ids) do
+			local name = Try(C_Spell and C_Spell.GetSpellName, id)
+			if type(name) == "string" and name ~= "" then table.insert(names, Clean(name, 40)) end
+			if #names >= 8 then break end
+		end
+	end
+	return names
+end
+
+-- Title, story text and objectives of a quest in the log, for narration.
+function S.QuestStory(questId)
+	local title = Try(C_QuestLog and C_QuestLog.GetTitleForQuestID, questId)
+	local index = Try(C_QuestLog and C_QuestLog.GetLogIndexForQuestID, questId)
+	local description, objectives
+	if type(index) == "number" then description, objectives = Try(GetQuestLogQuestText, index) end
+	return Clean(title or "", 80), Clean(description or "", 1000), Clean(objectives or "", 300)
+end

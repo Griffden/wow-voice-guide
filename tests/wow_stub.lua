@@ -156,7 +156,8 @@ function hooksecurefunc(a, b, c)
 		_G[a] = function(...) local r = orig(...); b(...); return r end
 	end
 end
-function InCombatLockdown() return false end
+function InCombatLockdown() return STUB.combat or false end
+function UnitAffectingCombat(unit) return STUB.combat or false end
 function ReloadUI() STUB.reloaded = true end
 function GetTime() return STUB.now end
 function time() return STUB.epoch + math.floor(STUB.now) end
@@ -232,6 +233,9 @@ C_QuestLog = {
 	IsComplete = function(id) return STUB.readyQuests[id] or false end,
 	GetNextWaypointText = function(id) return STUB.waypointText[id] end,
 	GetAllCompletedQuestIDs = function() return STUB.completed end,
+	GetLogIndexForQuestID = function(id)
+		for i, quest in ipairs(STUB.quests) do if quest.questID == id then return i end end
+	end,
 }
 function GetQuestLogCompletionText(index)
 	local quest = STUB.quests[index] or {}
@@ -271,6 +275,9 @@ C_Traits = {
 	GetDefinitionInfo = function(def)
 		for _, n in pairs(TRAIT_NODES) do if n.def == def then return { spellID = n.spell } end end
 	end,
+}
+C_SpellBook = {
+	GetCurrentLevelSpells = function(level) return STUB.levelSpells and STUB.levelSpells[level] end,
 }
 C_Spell = {
 	GetSpellName = function(id)

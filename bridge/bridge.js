@@ -28,6 +28,7 @@ const P = require('./protocol'); // the pure protocol code, unit-tested in tests
 const Providers = require('./providers');
 const GameState = require('./gamestate');
 const Speech = require('./speech');
+const Announce = require('./announce');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -207,7 +208,7 @@ function atomicWrite(file, content) {
 
 // Slot file / Inbox.lua body: see protocol.luaTable.
 function slotFile(globalName, records) {
-  return P.luaTable(globalName, records, { cwd: DEFAULT_CWD, restore: pendingRestore });
+  return P.luaTable(globalName, records, { cwd: DEFAULT_CWD, restore: pendingRestore, announce: Announce.settings(cfg) });
 }
 
 function addonInstalled() {
@@ -362,6 +363,22 @@ function submit(job) {
       return;
     }
   }
+  if (job.announceSet) {
+    // The player switched announcements in game: the companion keeps them.
+    cfg.announce = { ...(cfg.announce || {}), ...job.announceSet };
+    if (process.send) process.send({ type: 'config:announce', announce: Announce.settings(cfg) });
+    log(`#${job.id}${job.session ? '@' + job.session : ''} announcements: ${Object.entries(job.announceSet).map(([k, v]) => `${k} ${v ? 'on' : 'off'}`).join(', ')}`);
+  }
+  if (job.announce || (job.announceSet && !job.hello && !job.voice && !String(job.text || '').trim())) {
+    markHandled(job);
+    saveState();
+    ack(job.id);
+    if (job.announce) {
+      const result = announcer.handle(job.text, { game: cfg.gameContext === false ? null : state.game });
+      log(`#${job.id} announcement ${(Announce.fieldsOf(job.text).kind || '?')}: ${result}`);
+    } else publishNow();
+    return;
+  }
   if (job.state !== undefined && !job.hello && !job.forget && !job.voice && !job.voiceCancel && !String(job.text || '').trim()) {
     // Game state only: applied above, nothing to run.
     markHandled(job);
@@ -477,6 +494,28 @@ function createSpeaker(job, label = String(job.id)) {
   });
 }
 
+// Spoken announcements wait while the guide is answering or speaking.
+let answering = 0;
+const announcer = new Announce.Announcer({
+  cfg,
+  log: line => log(line),
+  busy: () => answering > 0,
+  speak: async text => {
+    if (!process.send) return;
+    const speaker = createSpeaker({ id: 0 }, 'announce');
+    const result = await speaker.finish(text);
+    if (result.mode === 'none') process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
+  },
+});
+
+// "Read me this quest": the focused quest's text from the game state, as an answer.
+function readQuestAnswer(text) {
+  if (!Announce.asksToReadQuest(text)) return null;
+  const story = Announce.questStory(state.game);
+  if (!story) return null;
+  return { display: story, speech: story, streamed: false, waypoint: null, sources: [], lookup: { basis: 'game', questNotes: 0, toolCalls: 0, webSearches: 0, citations: 0 } };
+}
+
 async function runAssistantJob(job, text) {
   const key = chatKey(job);
   const tag = `#${job.id}${job.session ? '@' + job.session : ''}`;
@@ -491,6 +530,7 @@ async function runAssistantJob(job, text) {
   beat(job);
   publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'thinking...', transcript: job.transcript, cwd: job.cwd }, true);
   if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
+  answering++;
   try {
     const onProgress = text => { if (process.send) process.send({ type: 'status', status: { state: 'thinking', text } }); };
     // Spoken answers stream: the speaker starts Fish on the first sentence the
@@ -501,9 +541,12 @@ async function runAssistantJob(job, text) {
       input.onSpeech = delta => speaker.push(delta);
       input.onLookup = () => speaker.lookupStarted();
     }
-    let answer;
-    try { answer = await Providers.requestGuideAnswer(cfg, input); }
-    catch (e) { if (speaker) speaker.cancel(); throw e; }
+    // "Read me this quest" is read straight from the quest log, no model call.
+    let answer = readQuestAnswer(job.text);
+    if (!answer) {
+      try { answer = await Providers.requestGuideAnswer(cfg, input); }
+      catch (e) { if (speaker) speaker.cancel(); throw e; }
+    }
     if (answer.lookup) log(`${tag} guide: basis=${answer.lookup.basis}, questNotes=${answer.lookup.questNotes}, toolCalls=${answer.lookup.toolCalls}, webSearches=${answer.lookup.webSearches}, citations=${answer.lookup.citations}`);
     if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources });
     // The text goes to the game at once; speech that is still playing finishes on its own.
@@ -524,6 +567,8 @@ async function runAssistantJob(job, text) {
   } catch (e) {
     finish(job, 'error', Providers.redact(e.message || String(e)), '', [], { transcript: job.transcript });
     if (process.send) process.send({ type: 'status', status: { state: 'error', text: Providers.redact(e.message || String(e)) } });
+  } finally {
+    answering--;
   }
 }
 

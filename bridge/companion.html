@@ -75,6 +75,15 @@
           <label class="check"><input id="fishStream" type="checkbox" checked> Stream speech: start talking on the first sentence</label>
           <label class="check"><input id="fishFiller" type="checkbox" checked> Say a short filler line when a lookup takes a while</label>
         </fieldset>
+        <fieldset>
+          <legend>Spoken announcements · off by default</legend>
+          <p class="voice-note">Short spoken notes in the selected voice, never during combat. Informational only; also switchable in game with <code>/wow-claude announce</code> and <code>/wow-claude narrate</code>.</p>
+          <label class="check"><input id="announceQuest" type="checkbox"> Quest objectives complete, and where to turn in</label>
+          <label class="check"><input id="announceLevel" type="checkbox"> Level up, with new spells at your trainer</label>
+          <label class="check"><input id="announceZone" type="checkbox"> New zone: a one-sentence quest briefing</label>
+          <label class="check"><input id="announceBags" type="checkbox"> Bags nearly full or gear about to break</label>
+          <label class="check"><input id="announceNarrate" type="checkbox"> Read newly accepted quests aloud</label>
+        </fieldset>
         <button type="submit" class="primary">Save and restart bridge</button>
         <span id="saved"></span>
       </form>

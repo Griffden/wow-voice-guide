@@ -62,6 +62,13 @@
   "audio": {
     "volumePercent": 125
   },
+  "announce": {
+    "quest": false,
+    "level": false,
+    "zone": false,
+    "bags": false,
+    "narrate": false
+  },
   "gameContext": true,
   "pollMs": 750,
   "progressWriteMs": 3000,

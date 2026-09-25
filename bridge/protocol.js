@@ -89,15 +89,25 @@ function sameFolder(a, b) {
 // running, "c" = the record carries a game-context field before the text (an
 // empty one clears the context the bridge keeps), "s" = the record carries game
 // state sections in that field instead (see bridge/gamestate.js). "vol=125" sets
-// companion voice playback volume as a percentage (0..200).
+// companion voice playback volume as a percentage (0..200). "a" = the text is
+// an announcement moment (quest ready, level up, ...; see bridge/announce.js),
+// "ann=quest:1,zone:0" = the player switched announcements in game.
 function parseFlags(flags) {
   const out = { newSession: false, hello: false, forget: false, context: false, state: false, voice: false, voiceCancel: false, volume: null, allow: [] };
+  const announceSet = {};
   for (const tok of String(flags || '').split(';')) {
     if (tok === 'n') out.newSession = true;
     else if (tok === 'h') out.hello = true;
     else if (tok === 'd') out.forget = true;
     else if (tok === 'c') out.context = true;
     else if (tok === 's') out.state = true;
+    else if (tok === 'a') out.announce = true;
+    else if (tok.startsWith('ann=')) {
+      for (const pair of tok.slice(4).split(',')) {
+        const [kind, on] = pair.split(':');
+        if (/^(quest|level|zone|bags|narrate)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
+      }
+    }
     else if (tok === 'v') out.voice = true;
     else if (tok === 'x') out.voiceCancel = true;
     else if (tok.startsWith('vol=')) {
@@ -106,6 +116,7 @@ function parseFlags(flags) {
     }
     else if (tok.startsWith('allow=')) out.allow.push(...tok.slice(6).split(',').map(s => s.trim()).filter(Boolean));
   }
+  if (Object.keys(announceSet).length) out.announceSet = announceSet;
   return out;
 }
 
@@ -241,6 +252,9 @@ function luaTable(globalName, records, opts = {}) {
     `\tts = ${luaStr(new Date(now).toISOString())},`,
     `\tnow = ${Math.floor(now / 1000)},`,
     `\tcwd = ${luaStr(opts.cwd || '')},`,
+    // The companion's announcement switches, so the add-on stops sending
+    // moments nobody will speak.
+    ...(opts.announce ? [`\tannounce = { ${Object.entries(opts.announce).filter(([k, v]) => /^\w+$/.test(k) && typeof v === 'boolean').map(([k, v]) => `${k} = ${v}`).join(', ')} },`] : []),
     '\treplies = {',
   ];
   for (const r of records) {

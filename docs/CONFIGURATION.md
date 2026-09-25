@@ -96,6 +96,20 @@ Streamed output is 44.1 kHz mono 16-bit PCM; the one-shot path returns 44.1 kHz 
 
 With the OpenAI preset and both streaming options on (defaults), the guide model's answer is streamed too (`playerGuide.stream`): the answer's JSON puts `basis` first, its spoken label (if any) and the first sentence of `speech` go to Fish while the model is still writing, and the text answer reaches the game when the model finishes. Gemini and local presets are not streamed, but their answer still reaches Fish sentence by sentence. The bridge log records `first audio N ms after the question` for every spoken answer.
 
+### Spoken announcements
+
+Short spoken notes in the selected Fish voice, each switched on separately and **off by default**. The same switches are in companion Settings (**Spoken announcements**) and in game (`/wow-claude announce <kind> on|off`, `/wow-claude narrate on|off`; `/wow-claude announce` alone lists them). They are information only: nothing presses keys, targets, moves or accepts anything for you.
+
+| Field | Default | Says |
+|---|---|---|
+| `announce.quest` | `false` | "Wolves Across the Border is ready to turn in. Return to Marshal Dughan." (the client's next step, else the quest giver and coordinates from the quest database) |
+| `announce.level` | `false` | "Level 16! New at your class trainer: Shield Block and Revenge." |
+| `announce.zone` | `false` | "Welcome to Westfall. There are 12 quests you can pick up in Westfall. Nearest: ..." |
+| `announce.bags` | `false` | "Your bags are almost full: 1 free slot left." at 2 or fewer free slots; a repair warning when an item drops to 20 % durability |
+| `announce.narrate` | `false` | Reads a newly accepted quest's title, text and objectives aloud |
+
+Never during combat: the add-on holds moments until combat ends and drops them after a minute. Zone briefings are spoken at most every 90 seconds, bag and repair warnings at most every 5 minutes, and announcements wait while the guide is answering. Saying "read me this quest" reads the selected or tracked quest whether or not narration is on.
+
 ### Playback volume
 
 The add-on saves `voiceVolume` per WoW account and synchronizes it to the companion at login and whenever the in-game slider changes. The range is 0–200%, with 125% as the default. Values above 100% are applied through Web Audio gain followed by a limiter. The companion mirrors the current value to `audio.volumePercent` in `bridge/config.json` so it survives a companion-only restart.

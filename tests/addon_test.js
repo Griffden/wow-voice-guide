@@ -717,3 +717,75 @@ test('reload mode writes the outbox for the bridge instead of drawing the strip'
   assert.equal(vm.evaluate('WoWClaudeDB.outbox.text'), Buffer.from('via reload').toString('hex'));
   assert.equal(decodeStrip(vm), null);
 });
+
+// Announcement records ("a"): their fields, decoded like the bridge does.
+function announcements(vm) {
+  return stripRecords(vm).filter(r => r.flags === 'a').map(r => Object.fromEntries(r.text.split('\x1C').map(p => p.split('\x1D'))));
+}
+
+test('announcement moments go to the companion: quest ready, level up, new zone, bags, durability, accepted quest', () => {
+  const vm = newVM();
+  vm.run(`STUB.quests = { { questID = 33, title = "Wolves Across the Border", description = "Those wolves are a menace.", instructions = "Bring 8 Tough Wolf Meat." } }`);
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  const fire = ev => { vm.run(ev); vm.run('STUB.RunTimers()'); };
+  // The first quest log look only takes note; the next change announces.
+  fire('STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.equal(announcements(vm).length, 0);
+  fire('STUB.readyQuests[33] = true; STUB.waypointText[33] = "Return to Marshal Dughan"; STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.deepEqual(announcements(vm), [{ kind: 'quest', id: '33', title: 'Wolves Across the Border', next: 'Return to Marshal Dughan' }]);
+  deliverState(vm);
+  fire('STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.equal(announcements(vm).length, 0, 'announced once');
+  fire('STUB.levelSpells = { [24] = { 19552 } }; STUB.FireEvent("PLAYER_LEVEL_UP", 24)');
+  assert.deepEqual(announcements(vm)[0], { kind: 'level', level: '24', spells: 'Improved Aspect of the Hawk' });
+  deliverState(vm);
+  fire('STUB.zone = "Westfall"; STUB.FireEvent("ZONE_CHANGED_NEW_AREA")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'zone', zone: 'Westfall', map: '1431' });
+  deliverState(vm);
+  fire('STUB.freeSlots = 1; STUB.FireEvent("BAG_UPDATE_DELAYED")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'bags', free: '1', total: '16' });
+  deliverState(vm);
+  fire('STUB.FireEvent("BAG_UPDATE_DELAYED")');
+  assert.equal(announcements(vm).length, 0, 'not again until the bags were emptied');
+  fire('STUB.gear = { [5] = { link = "|Hitem:1|h[Chest]|h", cur = 6, max = 60 } }; STUB.FireEvent("UPDATE_INVENTORY_DURABILITY")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'repair', percent: '10', slot: 'Chest' });
+  deliverState(vm);
+  fire('STUB.FireEvent("QUEST_ACCEPTED", 33)');
+  assert.deepEqual(announcements(vm)[0], { kind: 'accept', id: '33', title: 'Wolves Across the Border', text: 'Those wolves are a menace.', objectives: 'Bring 8 Tough Wolf Meat.' });
+});
+
+test('announcements wait out combat, respect in-game switches, and follow the companion settings in slot files', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  vm.run('STUB.combat = true; STUB.levelSpells = {}; STUB.FireEvent("PLAYER_LEVEL_UP", 24)');
+  assert.equal(announcements(vm).length, 0, 'nothing in combat');
+  vm.run('STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(announcements(vm)[0].kind, 'level', 'sent once combat ends');
+  deliverState(vm);
+  // A moment older than a minute when combat ends is dropped.
+  vm.run('STUB.combat = true; STUB.FireEvent("PLAYER_LEVEL_UP", 25); STUB.now = STUB.now + 90; STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(announcements(vm).length, 0);
+  // Switched in game: the companion is told, and this side stops sending.
+  vm.run('SlashCmdList.WOWCLAUDE("announce level off")');
+  const rec = stripRecords(vm).find(r => r.flags.startsWith('ann='));
+  assert.equal(rec.flags, 'ann=level:0');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /level - level up and new trainer spells: off/);
+  deliverState(vm);
+  vm.run('STUB.FireEvent("PLAYER_LEVEL_UP", 26)');
+  assert.equal(announcements(vm).length, 0);
+  vm.run('SlashCmdList.WOWCLAUDE("narrate on")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=narrate:1'));
+  vm.run('SlashCmdList.WOWCLAUDE("announce all on")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1'));
+  // The companion's settings arrive with the next slot.
+  nextSlot(vm, '{ now = time(), cwd = "", replies = {}, announce = { quest = true, level = false, zone = false, bags = false, narrate = false } }');
+  vm.run('WoWClaude.Connect(); STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.level'), 'false');
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.quest'), 'true');
+});

@@ -180,8 +180,15 @@ async function stopCapture() {
   await old.context.close();
 }
 
+const ANNOUNCE_BOXES = { quest: 'announceQuest', level: 'announceLevel', zone: 'announceZone', bags: 'announceBags', narrate: 'announceNarrate' };
+
+function applyAnnounce(announce) {
+  for (const [kind, id] of Object.entries(ANNOUNCE_BOXES)) $(id).checked = !!(announce && announce[kind] === true);
+}
+
 function applyConfig(config) {
   const dg = config.deepgram || {}, fish = config.fish || {}, llm = config.llm || {};
+  applyAnnounce(config.announce);
   setVoiceVolume((config.audio || {}).volumePercent ?? 125);
   $('deepgramKey').value = dg.apiKey || '';
   $('deepgramModel').value = dg.model || 'flux-general-en';
@@ -213,6 +220,7 @@ $('settings').addEventListener('submit', async event => {
     deepgram: { apiKey: $('deepgramKey').value.trim(), model: $('deepgramModel').value.trim(), eotThreshold: Number($('eotThreshold').value) },
     fish: { apiKey: $('fishKey').value.trim(), voiceId: $('fishVoice').value.trim(), model: $('fishModel').value, latency: $('fishLatency').value, stream: $('fishStream').checked, filler: $('fishFiller').checked },
     llm: { ...p, apiKey: $('llmKey').value.trim(), endpoint: $('llmEndpoint').value.trim(), model: $('llmModel').value.trim() },
+    announce: Object.fromEntries(Object.entries(ANNOUNCE_BOXES).map(([kind, id]) => [kind, $(id).checked])),
   });
   applyConfig(updated);
   $('saved').textContent = 'Saved';
@@ -239,6 +247,7 @@ window.wowVoice.on('guide:sources', value => {
   $('guideSources').hidden = box.childElementCount === 0;
 });
 window.wowVoice.on('audio:volume', value => setVoiceVolume(value && value.volumePercent));
+window.wowVoice.on('config:announce', applyAnnounce);
 window.wowVoice.on('log', line => {
   const log = $('log');
   log.textContent = (log.textContent + line + '\n').slice(-20000);

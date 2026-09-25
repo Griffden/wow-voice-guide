@@ -34,6 +34,8 @@ Relevant flags:
 - `h`: hello/connection handshake
 - `s`: a game state field is present (see below)
 - `c`: a single game-context string is present (older add-ons and the reload-mode outbox)
+- `a`: an announcement moment; the text holds `key GS value` fields (see Announcements below)
+- `ann=quest:1,zone:0`: the player switched announcements in game
 - `d`: forget the chat
 - `v`: start a voice turn
 - `x`: cancel a voice turn (reserved by the worker protocol)
@@ -161,6 +163,14 @@ The answer schema puts `basis` before `speech`, so the Classic/general label is 
 If the socket fails before any audio arrived, the worker falls back to the one-shot path: it posts the text to Fish `/v1/tts`, requests a mono WAV, and sends the file path to the parent, which reads and deletes it and plays it in the renderer. `fish.stream: false` always uses that path. A Fish failure never discards the text answer.
 
 Deepgram Flux's `EagerEndOfTurn`/`TurnResumed` events (starting the model speculatively before the turn is final) are not used yet.
+
+## Announcements and quest narration
+
+The add-on reports a few moments in `a` records: a quest in the log becomes ready to turn in (`ReadyForTurnIn`, with `GetNextWaypointText`), `PLAYER_LEVEL_UP` (with the names of `C_SpellBook.GetCurrentLevelSpells`), `ZONE_CHANGED_NEW_AREA` to a new zone, free bag slots dropping to 2 or fewer, the most worn item dropping to 20 % durability or less, and `QUEST_ACCEPTED` (title, story text and objectives from the quest log). The first quest-log look after login and the login zone only set a baseline; bags and durability warn once until they recover. Nothing is sent while `InCombatLockdown()` or `UnitAffectingCombat("player")`: moments wait for `PLAYER_REGEN_ENABLED` and are dropped after a minute.
+
+`bridge/announce.js` speaks a moment only when its kind is switched on in `announce` (all off by default; `accept` uses `narrate`, `repair` uses `bags`). It builds one or two sentences without a model call, from the moment, the game state and the offline quest database (the quest giver when the client gives no next step; the zone briefing is `questdb.zoneSummary`). Each kind has a minimum interval, at most four wait in a queue, anything older than a minute is dropped, and announcements wait while the guide is answering or speaking. They play through the same Fish streaming path as answers.
+
+Switches live in `bridge/config.json`. `/wow-claude announce <kind> on|off` and `/wow-claude narrate on|off` send an `ann=` flag that the bridge applies and the desktop process saves; every slot file carries the current switches back (`announce = { quest = true, ... }`), so the add-on stops sending moments nobody will speak. "Read me this quest" is answered from the `quest` section directly, without a model call.
 
 ## Inbound game protocol
 

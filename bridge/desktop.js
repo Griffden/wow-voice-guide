@@ -38,6 +38,7 @@ function publicConfig() {
     fish: c.fish || {},
     llm: c.llm || {},
     audio: c.audio || {},
+    announce: c.announce || {},
     capture: c.capture || {},
   };
 }
@@ -48,6 +49,7 @@ function writeConfig(update) {
   current.fish = { ...(current.fish || {}), ...(update.fish || {}) };
   current.llm = { ...(current.llm || {}), ...(update.llm || {}) };
   current.audio = { ...(current.audio || {}), ...(update.audio || {}) };
+  current.announce = { ...(current.announce || {}), ...(update.announce || {}) };
   const tmp = CONFIG_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(current, null, 2) + '\n');
   fs.renameSync(tmp, CONFIG_FILE);
@@ -180,6 +182,11 @@ function onBridgeMessage(message) {
   if (!message || !message.type) return;
   if (message.type === 'voice:start') startFlux(message);
   else if (message.type === 'voice:cancel') closeFlux('Listening cancelled.', true);
+  else if (message.type === 'config:announce') {
+    // Switched in game (/wow-claude announce ...): keep it and show it in Settings.
+    writeConfig({ announce: message.announce || {} });
+    ui('config:announce', cfg.announce);
+  }
   else if (message.type === 'voice:volume') {
     const volumePercent = Math.max(0, Math.min(200, Math.round(Number(message.volumePercent) || 0)));
     writeConfig({ audio: { volumePercent } });

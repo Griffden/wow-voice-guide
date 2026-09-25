@@ -761,6 +761,7 @@ local function TryLoadSlot(why)
 	if type(data) == "table" and type(data.cwd) == "string" and data.cwd ~= "" then run.bridgeCwd = data.cwd end
 	local matched = ApplyReplies(type(data) == "table" and data.replies or nil)
 	if type(data) == "table" and data.restore then ImportRestore(data.restore) end
+	if type(data) == "table" then WoWClaude.ApplyAnnounceSettings(data.announce) end
 	if why == "signal" and not matched then
 		run.signalUnreliable = true
 	end
@@ -1129,6 +1130,7 @@ end
 -- Returns true when the event was one of ours.
 function WoWClaude.OnStateEvent(event, ...)
 	if not db then return false end
+	WoWClaude.AnnounceEvent(event, ...)
 	local st = StateRun()
 	if STATE_EVENTS[event] then
 		WoWClaude.MarkState(STATE_EVENTS[event])
@@ -1157,6 +1159,181 @@ function WoWClaude.OnStateEvent(event, ...)
 		return true
 	end
 	return false
+end
+
+---------------------------------------------------------------------------
+-- Spoken announcements (opt-in; the companion speaks them)
+---------------------------------------------------------------------------
+
+-- A few game moments the companion can speak up about: a quest's objectives
+-- are done, a level up (and what the trainer has now), a new zone, bags nearly
+-- full or gear about to break, and a newly accepted quest read aloud. They are
+-- information only: nothing here acts for the player.
+--
+-- Whether each is spoken is the companion's setting (off by default). This
+-- side only sends the moment, in an "a" record, unless the player turned that
+-- kind off here; the slot files carry the companion's settings back
+-- (ApplyAnnounceSettings). Nothing is sent in combat: moments that happen
+-- then wait for PLAYER_REGEN_ENABLED and are dropped after a minute.
+
+local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate" }
+local ANNOUNCE_STALE = 60
+local BAGS_LOW, BAGS_OK = 2, 5 -- free slots: warn at 2 or fewer, again after 5 or more
+local WORN_LOW, WORN_OK = 20, 50 -- durability percent: warn at 20 or less, again after 50
+
+local function AnnounceToggle(kind)
+	if kind == "accept" then return "narrate" end
+	if kind == "repair" then return "bags" end
+	return kind
+end
+
+local function InCombat()
+	if InCombatLockdown and InCombatLockdown() then return true end
+	return Try(UnitAffectingCombat, "player") and true or false
+end
+
+local function SendAnnouncement(fields)
+	local parts = {}
+	for _, f in ipairs(fields) do table.insert(parts, f[1] .. GS .. tostring(f[2] or ""):gsub("[\28-\31]", " ")) end
+	db.lastSeq = db.lastSeq + 1
+	local c = ActiveChat()
+	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "a", name = c and c.name or "", text = table.concat(parts, FS), sentAt = GetTime(), stateRec = true }
+	RefreshStrip()
+end
+
+-- kind: quest | level | zone | bags | repair | accept; fields: { { key, value }, ... }
+function WoWClaude.Announce(kind, fields)
+	if not db or db.settings.mode ~= "pixel" then return end
+	local a = db.settings.announce
+	if a and a[AnnounceToggle(kind)] == false then return end
+	local out = { { "kind", kind } }
+	for _, f in ipairs(fields or {}) do table.insert(out, { f[1], State.Clean(f[2], 1000) }) end
+	if InCombat() then
+		run.announceLater = run.announceLater or {}
+		table.insert(run.announceLater, { at = GetTime(), fields = out })
+		return
+	end
+	if WoWClaude.IsConnected() then SendAnnouncement(out) end
+end
+
+-- Out of combat again: whatever is still recent goes out now.
+function WoWClaude.FlushAnnouncements()
+	local later = run.announceLater
+	run.announceLater = nil
+	if not later or InCombat() or not WoWClaude.IsConnected() then return end
+	for _, item in ipairs(later) do
+		if GetTime() - item.at <= ANNOUNCE_STALE then SendAnnouncement(item.fields) end
+	end
+end
+
+-- Quests whose objectives just became complete. The first look after login
+-- only takes note of what is already done.
+function WoWClaude.CheckQuestReady()
+	run.questCheckPending = nil
+	local quests = State.QuestList()
+	local first = run.readySeen == nil
+	local seen = {}
+	for _, q in ipairs(quests) do
+		if q.ready then
+			seen[q.id] = true
+			if not first and not run.readySeen[q.id] then
+				local step = Try(C_QuestLog and C_QuestLog.GetNextWaypointText, q.id)
+				WoWClaude.Announce("quest", { { "id", q.id }, { "title", q.title }, { "next", type(step) == "string" and step or "" } })
+			end
+		end
+	end
+	run.readySeen = seen
+end
+
+function WoWClaude.AnnounceEvent(event, ...)
+	if event == "QUEST_LOG_UPDATE" or event == "QUEST_WATCH_UPDATE" then
+		if not run.questCheckPending then
+			run.questCheckPending = true
+			C_Timer.After(1, WoWClaude.CheckQuestReady)
+		end
+	elseif event == "PLAYER_LEVEL_UP" then
+		local level = ...
+		if type(level) == "number" then
+			WoWClaude.Announce("level", { { "level", level }, { "spells", table.concat(State.LevelSpells(level), "; ") } })
+		end
+	elseif event == "ZONE_CHANGED_NEW_AREA" then
+		local zone = Try(GetZoneText)
+		if type(zone) == "string" and zone ~= "" and zone ~= run.lastZone then
+			local announce = run.lastZone ~= nil
+			run.lastZone = zone
+			local mapId = Try(C_Map and C_Map.GetBestMapForUnit, "player")
+			if announce then WoWClaude.Announce("zone", { { "zone", zone }, { "map", mapId or "" } }) end
+		end
+	elseif event == "BAG_UPDATE_DELAYED" then
+		local free, total = State.BagSpace()
+		if total > 0 and free <= BAGS_LOW and not run.bagsLow then
+			run.bagsLow = true
+			WoWClaude.Announce("bags", { { "free", free }, { "total", total } })
+		elseif free >= BAGS_OK then
+			run.bagsLow = nil
+		end
+	elseif event == "UPDATE_INVENTORY_DURABILITY" then
+		local pct, slot = State.LowestDurability()
+		if pct and pct <= WORN_LOW and not run.worn then
+			run.worn = true
+			WoWClaude.Announce("repair", { { "percent", pct }, { "slot", slot } })
+		elseif pct and pct >= WORN_OK then
+			run.worn = nil
+		end
+	elseif event == "QUEST_ACCEPTED" then
+		-- QUEST_ACCEPTED carries the quest id (older clients: log index, then id).
+		local a, b = ...
+		local questId = type(b) == "number" and b or a
+		if type(questId) == "number" then
+			local title, text, objectives = State.QuestStory(questId)
+			if title ~= "" or text ~= "" then
+				WoWClaude.Announce("accept", { { "id", questId }, { "title", title }, { "text", text }, { "objectives", objectives } })
+			end
+		end
+	end
+end
+
+-- The companion's switches, as the slot files report them.
+function WoWClaude.ApplyAnnounceSettings(settings)
+	if type(settings) ~= "table" or not db then return end
+	db.settings.announce = db.settings.announce or {}
+	for _, kind in ipairs(ANNOUNCE_KINDS) do
+		if settings[kind] ~= nil then db.settings.announce[kind] = settings[kind] and true or false end
+	end
+end
+
+-- /wow-claude announce [kind|all on|off], /wow-claude narrate [on|off]
+function WoWClaude.AnnounceCommand(cmd, rest)
+	local c = ActiveChat()
+	local kind, value = rest:lower():match("^(%S+)%s*(%S*)$")
+	if cmd == "narrate" then kind, value = "narrate", (kind or "") end
+	db.settings.announce = db.settings.announce or {}
+	local a = db.settings.announce
+	local changed = {}
+	if (value == "on" or value == "off") and kind then
+		for _, k in ipairs(ANNOUNCE_KINDS) do
+			if kind == "all" or kind == k then
+				a[k] = value == "on"
+				table.insert(changed, k .. ":" .. (a[k] and "1" or "0"))
+			end
+		end
+	end
+	if #changed > 0 and db.settings.mode == "pixel" then
+		-- The companion keeps the setting; it answers with it in the next slot.
+		db.lastSeq = db.lastSeq + 1
+		run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "ann=" .. table.concat(changed, ","), name = c and c.name or "", text = "", sentAt = GetTime(), stateRec = true }
+		RefreshStrip()
+	end
+	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud" }
+	local lines = { "Spoken announcements (off unless turned on here or in the companion's Settings; never in combat):" }
+	for _, k in ipairs(ANNOUNCE_KINDS) do
+		local state = a[k] == true and "on" or a[k] == false and "off" or "as set in the companion"
+		table.insert(lines, "  " .. k .. " - " .. names[k] .. ": " .. state)
+	end
+	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
+	AddHistory(c, "system", table.concat(lines, "\n"))
+	WoWClaude.Render()
+	WoWClaude.Toggle(true)
 end
 
 -- The reload path has no section records: its outbox carries the whole context
@@ -2781,6 +2958,8 @@ local HELP = table.concat({
 	"/wow-claude cd <folder>            compatibility work folder for this chat (normally leave it at default)",
 	"/wow-claude reset                  next message starts a fresh guide conversation",
 	"/wow-claude context [on|off]       what the guide is told about your character and location",
+	"/wow-claude announce <kind> on|off spoken announcements: quest, level, zone, bags, all (off by default)",
+	"/wow-claude narrate on|off         read newly accepted quests aloud in the guide voice",
 	"/wow-claude mode pixel             no-reload transport (default)",
 	"/wow-claude mode reload            fallback transport: a /reload per step",
 	"/wow-claude resend                 show the strip again if the bridge missed it",
@@ -2895,6 +3074,8 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 			.. "\n\nTip: click the input box, then shift-click an item, spell or quest to attach its tooltip to your question.")
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)
+	elseif cmd == "announce" or cmd == "narrate" then
+		WoWClaude.AnnounceCommand(cmd, rest)
 	elseif cmd == "mode" then
 		if rest == "pixel" or rest == "reload" then
 			s.mode = rest
@@ -3045,6 +3226,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		if not db then InitDB() end
 		BuildUI()
 		run = { outbound = {} }
+		run.lastZone = Try(GetZoneText) -- the zone we log in to is not announced
 		SelfTestSignals()
 		ProcessInbox()
 		if AnyPending() then
@@ -3080,6 +3262,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		C_Timer.NewTicker(TICK_SECONDS, Tick)
 		C_Timer.After(3, WoWClaude.SayHello)
 	elseif event == "PLAYER_REGEN_ENABLED" then
+		WoWClaude.FlushAnnouncements()
 		if WoWClaude.reloadAfterCombat then
 			WoWClaude.reloadAfterCombat = nil
 			ReloadUI()

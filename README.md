@@ -17,6 +17,7 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | NPC and target awareness | When you talk to an NPC, the guide sees what they said and which quests they offer or accept (with quest IDs), so "what is he asking me to do?" works. It also knows your current target's name, level, elite/rare status, creature type and whether it is hostile. It never reads health, auras or cooldowns. |
 | Forever game data | Quests in your log that you mention (or your selected quest, when you ask "where do I go?") are looked up in the Wowhead WoW: Forever database before the guide answers: objectives, turn-in NPC, and quest text. With an OpenAI key and preset, the guide can also search that database itself (quests, NPCs with map coordinates, items, spells, zones) and the live web, choosing which lookups a question needs. Answers show their sources in game and as clickable buttons in the companion. |
 | Quests near you | Ask "what should I do?" or "any quests around here?" and the guide lists the quests you can pick up on your map, nearest quest giver first, from an offline WoW: Forever quest database converted from [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) (MIT). It filters by level, faction, race, class, the quests you have completed or already carry, and prerequisites. "Who gives X?" returns the giver and coordinates, which can become a waypoint. Works with every brain preset, offline. |
+| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (with the new spells at your trainer), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, and reading newly accepted quests aloud in your Fish voice. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
 | Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, while answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
@@ -109,6 +110,8 @@ Typed chat remains available as a fallback. Fish only speaks voice-originated qu
 | `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
 | `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
 | `/wow-claude volume 150` | Set spoken-reply volume (0–200). |
+| `/wow-claude announce zone on` | Switch a spoken announcement on or off: `quest`, `level`, `zone`, `bags`, or `all`. No argument lists them. Also in companion Settings. |
+| `/wow-claude narrate on` | Read newly accepted quests aloud in the guide voice. |
 | `/wow-claude new`, `chat`, `clear`, `copy` | Manage conversations and copy the last answer. |
 | `/wow-claude diag`, `slots`, `reload` | Diagnose transport or free used reply slots. |
 
