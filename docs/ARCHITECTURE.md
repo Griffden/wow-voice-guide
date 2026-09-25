@@ -9,13 +9,13 @@ Talk button -- pixel strip ------> capture.ps1 -> bridge worker
                                           |
                                           +-> renderer microphone (16 kHz PCM)
                                           +-> Deepgram Flux /v2/listen
-                                          +-> selected guide LLM
+                                          +-> selected guide LLM <-> Wowhead Forever data, web search
                                           +-> Fish Audio /v1/tts -> renderer playback
                                           |
 answer <---- load-on-demand slot ----------+
 ```
 
-WoW's Lua sandbox has no general network, microphone, or arbitrary runtime file APIs. The companion is therefore a required boundary component. Deepgram, the LLM host, and Fish Audio are remote APIs called by that one companion.
+WoW's Lua sandbox has no general network, microphone, or arbitrary runtime file APIs. The companion is therefore a required boundary component. Deepgram, the LLM host, Wowhead, and Fish Audio are remote services called by that one companion.
 
 The desktop main process owns credentials, provider sockets, bridge supervision, and WAV file access. The renderer is context-isolated and receives only a narrow preload API for configuration, microphone PCM, status, and playback.
 
@@ -41,19 +41,71 @@ For a voice turn, the worker acknowledges the request and asks the Electron main
 
 ## Brain and response contract
 
-The worker combines the current transcript with the last 12 local chat messages and the most recently acknowledged game context. OpenAI-compatible Chat Completions and native Gemini `generateContent` are implemented.
+The worker combines the current transcript with recent local chat messages and the most recently acknowledged game context, then calls `Providers.requestGuideAnswer` for every question:
 
-The brain is asked for:
+```text
+question + game context (character, zone, position, quest log with quest IDs)
+  |
+  +-> 1. quest-log lookup (bridge/wowdata.js, every preset)
+  |      quests the question names, or the selected quest for "where do I go?"
+  |      -> Wowhead Forever tooltip (objectives, turn-in) + search (quest text, level, zone)
+  |
+  +-> 2a. OpenAI preset: tool-using guide (Responses API, store: false)
+  |        tools: wowhead_search(query)      name -> Forever quests/NPCs/items/spells/zones + ids
+  |               wowhead_lookup(type, id)   one entry; NPCs include zone + map coordinates
+  |               web_search                 live web for guides, routes, list questions
+  |        up to playerGuide.maxRounds model calls; the last one cannot call tools
+  |
+  +-> 2b. Gemini / local preset: one Chat Completions or generateContent call
+  |        with the step-1 quest notes in the system prompt
+  |
+  +-> 3. label + sources + waypoint
+```
+
+The model decides which lookups a question needs. There is no keyword router, and answers are not discarded for lacking a matching source. Instead, every answer reports a `basis`:
+
+| basis | Meaning | Spoken label |
+|---|---|---|
+| `game` | Player's own game context, the conversation, or small talk | none, no sources shown |
+| `forever` | Wowhead Forever data or a Forever-specific page | none |
+| `classic` | Classic or Vanilla information for the same quest or place | "Based on Classic info, which may differ in Forever:" (omitted when the player asked about Classic) |
+| `general` | General WoW knowledge without a source | "I couldn't confirm this for Forever, so this is from general WoW knowledge:" |
+
+A `forever` or `classic` basis with nothing looked up (no quest notes, tool calls, or web search) is downgraded to `general`. Sources are the pages cited by web search, the Wowhead entries the model opened, the step-1 quest notes, and search hits the answer names by title.
+
+The tool-using guide returns:
+
+```json
+{
+  "speech": "answer to speak, without URLs or Markdown",
+  "basis": "game | forever | classic | general",
+  "waypoint": { "zone": "Darkshore", "x": 35.6, "y": 43.4, "label": "Cerellean Whiteclaw", "sourceUrl": "https://www.wowhead.com/forever/npc=3644" }
+}
+```
+
+A waypoint is kept only if its `sourceUrl` is something a lookup or search actually returned and its label matches the conversation. The zone becomes an in-game map ID through the player's current map or `bridge/zones.json` (Wowhead zone id -> uiMapID, generated from the Forever 1.60.1.70009 `UiMap`/`UiMapAssignment` tables on wago.tools, including new Forever zones). If the model omits the waypoint but the answer names exactly one looked-up NPC with coordinates, the worker builds the waypoint from that lookup.
+
+The Gemini/local presets are asked for:
 
 ```json
 {
   "display": "concise in-game answer",
   "speech": "natural spoken answer",
+  "basis": "game | forever | classic | general",
   "waypoint": { "mapId": 1431, "x": 0.452, "y": 0.678, "label": "Darkshire" }
 }
 ```
 
-Malformed JSON degrades to plain text. Waypoints are normalized and rejected unless the map ID and normalized coordinates are valid. The model is told not to invent coordinates; the player must still click **Set waypoint** in the add-on.
+Malformed JSON degrades to plain text with a `general` basis. Waypoints are normalized and rejected unless the map ID and normalized coordinates are valid. The player must still click **Set waypoint** in the add-on.
+
+### Forever game data
+
+Blizzard offers no web API for WoW: Forever during the beta. `bridge/wowdata.js` reads the two public JSON endpoints behind Wowhead's own tooltips and search box:
+
+- `https://nether.wowhead.com/forever/tooltip/{quest|npc|item|spell|zone|object}/{id}`
+- `https://www.wowhead.com/forever/search/suggestions-template?q={name}`
+
+Responses are cached in memory for six hours (at most 500 entries) and each request times out after six seconds. Tool failures are returned to the model as `{ "error": ... }` so it can try another lookup or answer with a label. Wowhead's beta data is incomplete (some NPCs have no location), and a "which quests start here?" list can only be approximated from search and the web.
 
 ## Fish Audio
 

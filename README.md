@@ -14,14 +14,15 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Spoken character voices | Hear replies through Fish Audio. Pick Peon, Furbolg, Knight, or Asmongold in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
 | Character-aware answers | Ask about your current character, level, class, faction, zone, subzone, map position, money, XP, talents, and professions when the Forever client exposes those fields. View or disable what is shared with `/wow-claude context`. |
 | Quest help | The add-on sends a compact list of visible quests (up to 25) and, when one is selected or tracked, its objectives and available instructions. Ask where to go, what an objective means, or what to do next. |
-| Sourced game lookup | With an OpenAI key and preset, quest and other game-fact questions can trigger live web search. The answer includes cited URLs in game and clickable source buttons in the companion. Search prefers Forever; for familiar places and the same named quest, it can use a matching Classic/Vanilla guide as a clearly labeled reference. It rejects unrelated quests and Retail/expansion results. |
+| Forever game data | Quests in your log that you mention (or your selected quest, when you ask "where do I go?") are looked up in the Wowhead WoW: Forever database before the guide answers: objectives, turn-in NPC, and quest text. With an OpenAI key and preset, the guide can also search that database itself (quests, NPCs with map coordinates, items, spells, zones) and the live web, choosing which lookups a question needs. Answers show their sources in game and as clickable buttons in the companion. |
+| Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, while answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
 | In-game chat and follow-ups | Type in the window or use `/ai <question>`; `/r` replies to the guide when it was the last messenger. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
 Try: “Where do I go for my tracked quest?”, “What does this objective mean?”, “What level am I and what quests do I have?”, or “Where can I find Bolvar Fordragon in WoW?” For a specific item or quest, shift-click its link into the guide input before asking.
 
-The guide does **not** see the whole game screen, read every open panel, control movement/combat, or have an authoritative Forever quest database. The desktop companion captures only the add-on's encoded pixel strip to receive messages; screen understanding is not implemented. Live web search can still miss new beta content. A direct Wowhead Forever quest link is a convenience link, not proof that the page was read.
+The guide does **not** see the whole game screen, read every open panel, control movement/combat, or keep its own Forever quest database: it reads Wowhead's public Forever tooltip and search data, which is incomplete during the beta (some NPCs have no location yet). Questions that need a list, such as "which quests start in Darnassus?", are answered from search and may miss quests. The desktop companion captures only the add-on's encoded pixel strip to receive messages; screen understanding is not implemented.
 
 ## What runs
 
@@ -52,7 +53,7 @@ The shipped default brain preset is **GPT-6 Luna with reasoning disabled**. Othe
 - **Gemma 4 31B** through the Gemini API — dense and potentially heavier/slower.
 - **Local / other OpenAI-compatible** — LM Studio, llama.cpp, vLLM, or another hosted Chat Completions endpoint.
 
-Both the normal-answer and web-lookup prompts default to **World of Warcraft: Forever**, even when you just say “WoW.” The guide searches Forever first, then can use Classic/Vanilla geography or instructions for the *same* quest as a provisional reference. It labels Classic-based answers because the beta can change routes, NPCs, and objectives. Your current in-game quest ID and objectives take priority when they differ. It does not silently import Retail or expansion guidance. A prompt and web citation cannot guarantee beta accuracy; do not treat an uncited exact waypoint as confirmed. A licensed, version-matched quest database would improve this further.
+Both the normal-answer and web-lookup prompts default to **World of Warcraft: Forever**, even when you just say “WoW.” The guide looks things up in the Wowhead Forever database first, then the web, then falls back to Classic/Vanilla information or general knowledge, and labels those answers because the beta can change routes, NPCs, and objectives. Your current in-game quest ID and objectives take priority when they differ. It does not silently import Retail or expansion guidance. Waypoints come only from looked-up or cited coordinates.
 
 ## Requirements
 
@@ -66,7 +67,7 @@ The example configuration still preselects [Warcraft 3 Peon](https://fish.audio/
 
 ## Install from source (Windows)
 
-You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcription, a Fish Audio key for speech, and a brain-provider key (OpenAI or Google) unless you run a local compatible model. **Automatic web lookup currently requires an OpenAI preset and key**; Google/local presets can still answer ordinary questions. Each provider uses your own account and may charge for usage. The example Fish voice ID is public and is not an API key.
+You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcription, a Fish Audio key for speech, and a brain-provider key (OpenAI or Google) unless you run a local compatible model. **The guide's own database and web lookups currently require an OpenAI preset and key**; Google/local presets still get the automatic lookup of quests you mention. Each provider uses your own account and may charge for usage. The example Fish voice ID is public and is not an API key.
 
 1. Fully close WoW, open PowerShell, and clone/install the project:
 

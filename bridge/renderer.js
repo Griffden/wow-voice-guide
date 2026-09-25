@@ -151,14 +151,6 @@ window.wowVoice.on('guide:sources', value => {
     button.addEventListener('click', () => window.wowVoice.openGuideSource(source.url));
     box.append(button);
   }
-  if (value.quest && Number.isInteger(value.quest.id)) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'source-link';
-    button.textContent = `Wowhead quest page (not searched directly) — #${value.quest.id}`;
-    button.addEventListener('click', () => window.wowVoice.openGuideSource(`https://www.wowhead.com/forever/quest=${value.quest.id}`));
-    box.append(button);
-  }
   $('guideSources').hidden = box.childElementCount === 0;
 });
 window.wowVoice.on('audio:volume', value => setVoiceVolume(value && value.volumePercent));

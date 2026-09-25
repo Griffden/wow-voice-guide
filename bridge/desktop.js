@@ -197,7 +197,7 @@ function onBridgeMessage(message) {
       ui('status', { state: 'speaking', text: 'Speaking…' });
     } catch (e) { log(`audio playback file failed: ${e.message}`); }
   } else if (message.type === 'status') ui('status', message.status);
-  else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources, quest: message.quest });
+  else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources });
 }
 
 function createWindow() {

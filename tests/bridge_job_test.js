@@ -21,8 +21,10 @@ test('researched answer logs lookup and completes without a reference error', as
     gameContext: () => 'Game: World of Warcraft: Forever',
     cfg: { playerGuide: true, fish: { speakTyped: false } },
     Providers: {
-      shouldResearchQuest: () => true,
-      requestPlayerGuide: async () => ({ display: 'Follow the river.', speech: 'Follow the river.', sources: [], lookup: { edition: 'forever', citations: 1, verified: 1, topicSearchMatch: true } }),
+      requestGuideAnswer: async (_cfg, input) => {
+        assert.equal(typeof input.onProgress, 'function');
+        return { display: 'Follow the river.', speech: 'Follow the river.', sources: [], lookup: { basis: 'forever', questNotes: 1, toolCalls: 0, webSearches: 0, citations: 0 } };
+      },
       redact: value => value,
     },
     log: value => logged.push(value),
@@ -31,5 +33,5 @@ test('researched answer logs lookup and completes without a reference error', as
   });
   await runAssistantJob({ id: 26, session: 'test-session', chat: 'test-chat', voice: false, cwd: '' }, 'Where is the quest?');
   assert.deepEqual(finished, [{ status: 'done', text: 'Follow the river.' }]);
-  assert.match(logged[0], /^#26@test-session guide lookup:/);
+  assert.match(logged[0], /^#26@test-session guide: basis=forever, questNotes=1/);
 });

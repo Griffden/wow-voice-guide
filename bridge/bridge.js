@@ -440,12 +440,11 @@ async function runAssistantJob(job, text) {
   publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'thinking...', transcript: job.transcript, cwd: job.cwd }, true);
   if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
   try {
-    const input = { context: gameContext(), history: prior, text: job.text };
-    const research = cfg.playerGuide !== false && Providers.shouldResearchQuest(job.text, input.context);
-    if (research && process.send) process.send({ type: 'status', status: { state: 'thinking', text: 'Looking up quest guidance…' } });
-    const answer = research ? await Providers.requestPlayerGuide(cfg, input) : await Providers.requestAssistant(cfg, input);
-    if (answer.lookup) log(`${tag} guide lookup: edition=${answer.lookup.edition}, citations=${answer.lookup.citations}, verified=${answer.lookup.verified}, topicSearchMatch=${answer.lookup.topicSearchMatch}`);
-    if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources, quest: answer.quest });
+    const onProgress = text => { if (process.send) process.send({ type: 'status', status: { state: 'thinking', text } }); };
+    const input = { context: gameContext(), history: prior, text: job.text, onProgress };
+    const answer = await Providers.requestGuideAnswer(cfg, input);
+    if (answer.lookup) log(`${tag} guide: basis=${answer.lookup.basis}, questNotes=${answer.lookup.questNotes}, toolCalls=${answer.lookup.toolCalls}, webSearches=${answer.lookup.webSearches}, citations=${answer.lookup.citations}`);
+    if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources });
     let speechError = '';
     let audioStarted = false;
     if (job.voice || (cfg.fish && cfg.fish.speakTyped)) {

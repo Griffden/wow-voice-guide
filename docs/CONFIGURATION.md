@@ -45,13 +45,24 @@ The app streams raw mono signed 16-bit PCM at 16 kHz in roughly 80–85 ms brows
 
 The local preset uses `http://127.0.0.1:1234/v1/chat/completions`, which matches LM Studio's common default. Change the URL/model for llama.cpp, vLLM, Ollama compatibility layers, or another host.
 
-### Player guide web lookup
+### Player guide lookups
 
-When a question asks for quest help, location, or a web guide, the companion uses OpenAI's Responses API live web search with the existing OpenAI key. The companion shows clickable cited sources; the in-game answer includes their URLs and a direct Wowhead Forever quest-page link when the relevant focused quest has an ID. That link is **not** evidence the page was read. Ordinary conversation does not trigger search. Searches may add usage charges and latency.
+Every question goes through two steps:
 
-All WoW-related questions default to **World of Warcraft: Forever** in both ordinary model answers and web lookup, unless the player explicitly asks about another edition. Saying “Classic or Forever” keeps the current Forever context. Search prefers Forever sources. For familiar geography and instructions for the same named/identified quest, a matching Classic or Vanilla guide can serve as a labeled provisional fallback. Current in-game quest IDs and objectives take priority if they differ. Retail, expansion, and unrelated-quest pages are not substitutes. A cited Classic route or step is not proof that the beta is identical. A waypoint button requires a cited coordinate and a known zone map ID; otherwise the guide gives directions without a button.
+1. **Quest-log lookup.** If the question names a quest in your log (matched loosely, since speech transcripts rarely match a title exactly), or asks "where do I go?" or "how do I finish this quest?" about the selected or tracked quest, the companion fetches that quest's objectives, turn-in, and quest text from the Wowhead WoW: Forever database and gives them to the model. This works with every brain preset.
+2. **Tool-using guide** (OpenAI preset and key). The model answers through OpenAI's Responses API and decides which lookups it needs: `wowhead_search` (find Forever quests, NPCs, items, spells, zones by name), `wowhead_lookup` (one entry by id, including NPC map coordinates), and live `web_search`. Small talk and questions your game context already answers use no tools. The companion status line shows each lookup as it happens.
 
-This first version requires the OpenAI brain endpoint and key; other brain presets still answer normal questions but quest web lookup will explain the missing OpenAI configuration. Set `"playerGuide": false` in local config to disable automatic search. `playerGuide.model` defaults to `gpt-6-luna`; `playerGuide.timeoutMs` defaults to `60000`.
+Answers are labeled instead of withheld. The model reports what an answer rests on: your game context, Forever data, Classic information, or general knowledge. Classic and general answers start with a short spoken caveat, and a claimed Forever answer with nothing looked up is treated as general knowledge. Sources appear in game and as companion buttons. A waypoint button appears only for coordinates that came from a lookup or a cited page; when the answer names one looked-up NPC that has coordinates, the companion sets the waypoint up itself.
+
+Wowhead has no official API. The companion uses the JSON endpoints behind Wowhead's own tooltips and search (`nether.wowhead.com/forever/tooltip/...` and `wowhead.com/forever/search/suggestions-template`) and caches results for six hours. Its beta data is incomplete (some NPCs have no location yet). `bridge/zones.json` maps Wowhead zone ids to in-game map ids and was generated from the Forever 1.60.1.70009 client tables on wago.tools.
+
+| Field | Default | Meaning |
+|---|---|---|
+| `playerGuide` | enabled | Set to `false` to turn off all lookups; questions then go straight to the brain preset |
+| `playerGuide.model` | `gpt-6-luna` | Responses API model for the tool-using guide |
+| `playerGuide.reasoningEffort` | model default | Optional Responses API reasoning effort |
+| `playerGuide.maxRounds` | `4` | Model calls per question; the last one cannot call tools, so an answer always arrives |
+| `playerGuide.timeoutMs` | `60000` | Deadline for the whole answer, including lookups |
 
 The add-on sends a compact list of up to 25 visible quests plus objectives and instructions for the selected or tracked quest. It does not read the rendered screen. If several quests are open and none is selected or tracked, name or shift-click the quest when asking which one you mean.
 

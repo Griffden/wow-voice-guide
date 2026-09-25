@@ -11,9 +11,13 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - GPT-6 Luna, GPT-4.1 Mini, hosted Gemma 4 26B A4B/31B, and local OpenAI-compatible presets.
 - Provider, PCM, voice-protocol, and waypoint tests.
 - In-game Talk keybind and playback volume controls (0–200%), with companion-side amplification and limiting.
+- WoW: Forever game data from Wowhead's tooltip and search endpoints (`bridge/wowdata.js`), with Forever zone-to-map ids generated from client data (`bridge/zones.json`).
+- Quests in your log that a question mentions are looked up automatically before the model answers, for every brain preset.
+- The OpenAI player guide is a tool-using model with `wowhead_search`, `wowhead_lookup`, and web search, and shows its lookups in the companion status line. NPC coordinates from a lookup can become a waypoint.
 
 ### Changed
 
+- The guide labels answers by what they rest on (Forever data, Classic information, or general knowledge) instead of refusing with "I couldn't verify". The keyword router that decided when to search and the URL filter that discarded unverified sources were removed.
 - Player-facing branding is WoW Voice Guide. Internal `WoWClaude` identifiers remain for upstream transport and SavedVariables compatibility.
 - Claude Code execution and tool-permission handling were replaced by the voice-guide provider pipeline.
 - Fish `s2.1-pro-free` is the source-build default TTS model. The example voice is the public Warcraft 3 Peon model and may be changed in companion settings.
