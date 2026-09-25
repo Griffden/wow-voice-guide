@@ -2077,6 +2077,37 @@ local function MakeButton(parent, label, width, onClick)
 end
 
 local PANEL_W = 150
+local DEFAULT_WIDTH, DEFAULT_HEIGHT = 780, 500
+local MIN_WIDTH, MIN_HEIGHT = 560, 300
+
+-- The largest window that leaves a margin on screen, so the title bar and the
+-- resize grip can always be reached.
+local function MaxWindowSize()
+	local w, h = UIParent:GetWidth(), UIParent:GetHeight()
+	return math.max(MIN_WIDTH, math.floor((w or 0) * 0.9)), math.max(MIN_HEIGHT, math.floor((h or 0) * 0.85))
+end
+
+-- Keep the window within the screen: caps resizing, shrinks a saved size that
+-- no longer fits (a larger size from before, or a smaller resolution/UI scale),
+-- and with reset restores the default size, centered.
+function WoWClaude.FitWindow(reset)
+	local f, s = ui.frame, db.settings
+	if not f then return end
+	local maxW, maxH = MaxWindowSize()
+	f:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, maxW, maxH)
+	if reset then
+		s.width, s.height = DEFAULT_WIDTH, DEFAULT_HEIGHT
+		s.point, s.relPoint, s.x, s.y = nil, nil, nil, nil
+	end
+	s.width = math.max(MIN_WIDTH, math.min(tonumber(s.width) or DEFAULT_WIDTH, maxW))
+	s.height = math.max(MIN_HEIGHT, math.min(tonumber(s.height) or DEFAULT_HEIGHT, maxH))
+	f:SetSize(s.width, s.height)
+	if reset then
+		f:ClearAllPoints()
+		f:SetPoint("CENTER")
+	end
+	if WoWClaude.Render then WoWClaude.Render() end
+end
 
 local function BuildUI()
 	if ui.frame then return end
@@ -2084,7 +2115,6 @@ local function BuildUI()
 
 	local f = CreateFrame("Frame", "WoWClaudeFrame", UIParent, "BackdropTemplate")
 	ui.frame = f
-	f:SetSize(s.width, s.height)
 	if s.point then
 		f:SetPoint(s.point, UIParent, s.relPoint or s.point, s.x or 0, s.y or 0)
 	else
@@ -2094,7 +2124,9 @@ local function BuildUI()
 	f:SetMovable(true)
 	f:SetResizable(true)
 	f:SetClampedToScreen(true)
-	f:SetResizeBounds(560, 300)
+	WoWClaude.FitWindow()
+	-- The screen can change between sessions or while hidden (resolution, UI scale).
+	f:HookScript("OnShow", function() WoWClaude.FitWindow() end)
 	f:EnableMouse(true)
 	f:RegisterForDrag("LeftButton")
 	f:SetScript("OnDragStart", f.StartMoving)
@@ -2498,11 +2530,24 @@ local function BuildUI()
 	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-	grip:SetScript("OnMouseDown", function() f:StartSizing("BOTTOMRIGHT") end)
-	grip:SetScript("OnMouseUp", function()
+	grip:SetScript("OnMouseDown", function(_, button)
+		if button ~= "RightButton" then f:StartSizing("BOTTOMRIGHT") end
+	end)
+	grip:SetScript("OnMouseUp", function(_, button)
+		if button == "RightButton" then
+			WoWClaude.FitWindow(true)
+			return
+		end
 		f:StopMovingOrSizing()
 		s.width, s.height = f:GetSize()
+		WoWClaude.FitWindow()
 	end)
+	grip:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT")
+		GameTooltip:SetText("Drag to resize\nRight-click to reset size and position")
+		GameTooltip:Show()
+	end)
+	grip:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
 	-- Mini bar: what the window collapses into. Click it to expand, drag to move.
 	local m = CreateFrame("Frame", "WoWClaudeMini", UIParent, "BackdropTemplate")
@@ -2628,6 +2673,7 @@ local HELP = table.concat({
 	"/wow-claude                        toggle the window (/claude works too)",
 	"/wow-claude mini                   collapse to the small bar (click the bar to expand)",
 	"/wow-claude hide                   hide the window completely",
+	"/wow-claude size reset             restore the default window size and center it (or right-click the resize grip)",
 	"/ai <text>                         send <text> to the current chat straight from the game chat box",
 	"/r <text>                          replies to the guide when it was the last to message you (else normal whisper reply)",
 	"/wow-claude <text>                 same as /ai",
@@ -2724,6 +2770,11 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 	elseif cmd == "cd" then
 		WoWClaude.SetFolder(rest, c)
 		WoWClaude.Toggle(true)
+	elseif cmd == "size" or cmd == "resize" then
+		WoWClaude.Toggle(true)
+		WoWClaude.FitWindow(rest:lower() == "reset")
+		AddHistory(c, "system", string.format("Window size %d x %d. /wow-claude size reset (or right-click the resize grip) restores the default size and centers the window.", s.width, s.height))
+		WoWClaude.Render()
 	elseif cmd == "reset" then
 		c.resetNext = true
 		AddHistory(c, "system", "Next message starts a fresh guide conversation in " .. c.cwd)

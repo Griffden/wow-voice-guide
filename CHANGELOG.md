@@ -15,6 +15,10 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Quests in your log that a question mentions are looked up automatically before the model answers, for every brain preset.
 - The OpenAI player guide is a tool-using model with `wowhead_search`, `wowhead_lookup`, and web search, and shows its lookups in the companion status line. NPC coordinates from a lookup can become a waypoint.
 
+### Fixed
+
+- The guide window can no longer be resized past the screen, where its resize grip became unreachable. A saved size that no longer fits is shrunk on load, and `/wow-claude size reset` or right-clicking the resize grip restores the default size, centered.
+
 ### Changed
 
 - The guide labels answers by what they rest on (Forever data, Classic information, or general knowledge) instead of refusing with "I couldn't verify". The keyword router that decided when to search and the URL filter that discarded unverified sources were removed.

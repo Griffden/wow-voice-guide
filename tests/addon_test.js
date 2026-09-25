@@ -553,6 +553,20 @@ test('chat rows: right-click opens a menu that renames or sets the folder of tha
   assert.equal(vm.evaluate('WoWClaudeDB.chats[1].name'), 'Chat 1');
 });
 
+test('the window can never be sized past the screen, and size reset restores it', () => {
+  const vm = newVM();
+  vm.run('UIParent.width, UIParent.height = 1920, 1080; WoWClaudeDB = { settings = { width = 3000, height = 2400, point = "TOPLEFT", x = 5, y = -5 } }');
+  login(vm);
+  assert.deepEqual([vm.num('WoWClaudeFrame.width'), vm.num('WoWClaudeFrame.height')], [1728, 918], 'a too-large saved size is pulled back on load');
+  assert.equal(vm.evaluate('table.concat(WoWClaudeFrame.resizeBounds, ",")'), '560,300,1728,918');
+  assert.deepEqual([vm.num('WoWClaudeDB.settings.width'), vm.num('WoWClaudeDB.settings.height')], [1728, 918]);
+  vm.run('SlashCmdList.WOWCLAUDE("size reset")');
+  assert.deepEqual([vm.num('WoWClaudeFrame.width'), vm.num('WoWClaudeFrame.height')], [780, 500]);
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.point'), null, 'position is re-centered');
+  assert.equal(vm.evaluate('WoWClaudeFrame.shown'), 'true');
+});
+
+
 test('minimize collapses to the mini bar and back; the mini bar X hides everything', () => {
   const vm = newVM();
   login(vm);

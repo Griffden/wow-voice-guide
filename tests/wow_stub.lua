@@ -59,6 +59,7 @@ function Methods.SetSize(self, w, h) self.width, self.height = w, h end
 function Methods.SetWidth(self, w) self.width = w end
 function Methods.SetHeight(self, h) self.height = h end
 function Methods.GetSize(self) return self:GetWidth(), self:GetHeight() end
+function Methods.SetResizeBounds(self, minW, minH, maxW, maxH) self.resizeBounds = { minW, minH, maxW, maxH } end
 function Methods.GetStringHeight(self) return 14 end
 function Methods.GetStringWidth(self) return 100 end
 function Methods.GetFontString(self) return self end
