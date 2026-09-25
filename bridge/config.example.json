@@ -43,6 +43,7 @@
   },
   "playerGuide": {
     "model": "gpt-6-luna",
+    "stream": true,
     "timeoutMs": 60000
   },
   "fish": {
@@ -53,10 +54,20 @@
     "speed": 1,
     "volume": 0,
     "speakTyped": false,
+    "stream": true,
+    "filler": true,
+    "fillerDelayMs": 1200,
     "timeoutMs": 60000
   },
   "audio": {
     "volumePercent": 125
+  },
+  "announce": {
+    "quest": false,
+    "level": false,
+    "zone": false,
+    "bags": false,
+    "narrate": false
   },
   "gameContext": true,
   "pollMs": 750,

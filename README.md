@@ -11,18 +11,29 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Capability | What you can do |
 |---|---|
 | Hands-free questions | Press the in-game **Talk** button, `/voice`, or a keybind; Deepgram Flux detects when you finish talking. The companion's **Finish now** and **Cancel listening** buttons are fallbacks. |
-| Spoken character voices | Hear replies through Fish Audio. Pick Peon, Furbolg, Knight, or Asmongold in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
-| Character-aware answers | Ask about your current character, level, class, faction, zone, subzone, map position, money, XP, talents, and professions when the Forever client exposes those fields. View or disable what is shared with `/wow-claude context`. |
-| Quest help | The add-on sends a compact list of visible quests (up to 25) and, when one is selected or tracked, its objectives and available instructions. Ask where to go, what an objective means, or what to do next. |
+| Spoken character voices | Hear replies through Fish Audio, streamed: speech starts on the answer's first sentence while the rest is still being written, and a short "Let me check that." covers a slow lookup. Both can be turned off in companion Settings. Pick Peon, Furbolg, Knight, or Asmongold in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
+| Character-aware answers | Ask about your character, level, zone, map position, money, XP and rested XP, hearthstone, talents (read through the Forever client's `C_Traits` talent API), professions, equipped gear and item levels, low durability, bag space, and the flight paths you know (read whenever you open a flight map). The add-on pushes each of these as it changes, so the guide always has the latest state. View or disable what is shared with `/wow-claude context`. |
+| Quest help | The add-on sends every quest in your log with its objective progress and whether it is ready to turn in, plus the full text, next step and turn-in text of the selected or tracked quest, and the quests you have completed. Ask where to go, what an objective means, or what to do next. |
+| NPC and target awareness | When you talk to an NPC, the guide sees what they said and which quests they offer or accept (with quest IDs), so "what is he asking me to do?" works. It also knows your current target's name, level, elite/rare status, creature type and whether it is hostile. It never reads health, auras or cooldowns. |
 | Forever game data | Quests in your log that you mention (or your selected quest, when you ask "where do I go?") are looked up in the Wowhead WoW: Forever database before the guide answers: objectives, turn-in NPC, and quest text. With an OpenAI key and preset, the guide can also search that database itself (quests, NPCs with map coordinates, items, spells, zones) and the live web, choosing which lookups a question needs. Answers show their sources in game and as clickable buttons in the companion. |
+| Quests near you | Ask "what should I do?" or "any quests around here?" and the guide lists the quests you can pick up on your map, nearest quest giver first, from an offline WoW: Forever quest database converted from [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) (MIT). It filters by level, faction, race, class, the quests you have completed or already carry, and prerequisites. "Who gives X?" returns the giver and coordinates, which can become a waypoint. Works with every brain preset, offline. |
+| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (with the new spells at your trainer), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, and reading newly accepted quests aloud in your Fish voice. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
 | Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, while answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
 | In-game chat and follow-ups | Type in the window or use `/ai <question>`; `/r` replies to the guide when it was the last messenger. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
-Try: “Where do I go for my tracked quest?”, “What does this objective mean?”, “What level am I and what quests do I have?”, or “Where can I find Bolvar Fordragon in WoW?” For a specific item or quest, shift-click its link into the guide input before asking.
+Try:
 
-The guide does **not** see the whole game screen, read every open panel, control movement/combat, or keep its own Forever quest database: it reads Wowhead's public Forever tooltip and search data, which is incomplete during the beta (some NPCs have no location yet). Questions that need a list, such as "which quests start in Darnassus?", are answered from search and may miss quests. The desktop companion captures only the add-on's encoded pixel strip to receive messages; screen understanding is not implemented.
+- “Where do I go for my tracked quest?” or “Where do I find the Mirror Lake water sample?”
+- “What quests can I pick up around here?”
+- While talking to an NPC: “Which of these quests should I take?”
+- “Where is Cerellean Whiteclaw?” (answers with coordinates and a **Set waypoint** button)
+- “What talents do I have?” or “Read me this quest.”
+
+For a specific item or quest, shift-click its link into the guide input before asking.
+
+The guide does **not** see the whole game screen, read every open panel, or control movement/combat. Its offline quest database knows quest givers, not every turn-in NPC, and more than half its quests come from AllTheThings data not yet reviewed for Forever; the guide says when an answer rests on those. Wowhead's public Forever data, which it also reads, is incomplete during the beta (some NPCs have no location yet). The desktop companion captures only the add-on's encoded pixel strip to receive messages; screen understanding is not implemented.
 
 ## What runs
 
@@ -31,16 +42,22 @@ There are only two things the player runs:
 1. The **WoW Voice Guide add-on** inside the game.
 2. One **WoW Voice Guide desktop companion** left open while playing.
 
-The companion talks to three APIs; Deepgram, the brain provider, and Fish Audio are services, not additional programs:
+The companion talks to three paid APIs (Deepgram, the brain provider, and Fish Audio) plus Wowhead's public Forever data. These are services, not additional programs:
 
 ```text
+add-on pushes live game state (character, quests, NPC dialog, target, gear, flight paths)
 in-game Talk button
   -> desktop microphone
   -> Deepgram Flux transcript + automatic end-of-turn
-  -> selected guide model
-  -> Fish Audio character voice
-  -> speakers + answer in the WoW window
+  -> guide model, with lookups it chooses:
+       offline Forever quest database (quests near you, quest givers)
+       Wowhead Forever (quests, NPCs with coordinates, items, spells)
+       live web search
+  -> Fish Audio character voice, streamed as the answer is written
+  -> speakers + answer (with sources and optional waypoint) in the WoW window
 ```
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how each step works.
 
 WoW add-ons cannot use the network or microphone. That sandbox is why the companion is necessary. Nothing injects into the game, reads game memory, moves the character, or generates player input.
 
@@ -94,6 +111,18 @@ You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcripti
 
 For first-run problems, account selection, microphone permissions, and transport diagnostics, see the [detailed Windows guide](docs/INSTALL-WINDOWS.md). Do not commit `bridge/config.json`; it contains your keys and is gitignored.
 
+### Updating an existing install
+
+Fully close WoW, then from the project folder:
+
+```powershell
+git pull
+npm install
+node setup.js
+```
+
+Relaunch WoW (new add-on files are only discovered at launch) and restart the companion. Setup keeps your keys and settings.
+
 Typed chat remains available as a fallback. Fish only speaks voice-originated questions by default; set `fish.speakTyped` to `true` in `bridge/config.json` to speak typed answers too. The in-game **Voice volume** slider ranges from 0–200%; values above 100% use companion-side amplification with clipping protection.
 
 ### Useful in-game commands
@@ -107,6 +136,9 @@ Typed chat remains available as a fallback. Fish only speaks voice-originated qu
 | `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
 | `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
 | `/wow-claude volume 150` | Set spoken-reply volume (0–200). |
+| `/wow-claude announce zone on` | Switch a spoken announcement on or off: `quest`, `level`, `zone`, `bags`, or `all`. No argument lists them. Also in companion Settings. |
+| `/wow-claude narrate on` | Read newly accepted quests aloud in the guide voice. |
+| `/wow-claude size reset` | Restore the default window size and center it (or right-click the window's resize grip). |
 | `/wow-claude new`, `chat`, `clear`, `copy` | Manage conversations and copy the last answer. |
 | `/wow-claude diag`, `slots`, `reload` | Diagnose transport or free used reply slots. |
 
@@ -154,10 +186,28 @@ Internal `WoWClaude` folder/global names and legacy `/wow-claude` commands remai
 npm test
 ```
 
-The suite parses the real Lua, executes the add-on in a Lua VM, round-trips the pixel codec under noise, and tests voice flags, transcript replacement, PCM conversion, structured answers, secret redaction, and waypoint serialization. A real-service smoke test still requires personal provider keys and a running Forever client.
+The suite parses the real Lua and runs the add-on in a Lua VM against a stub of the WoW API. It round-trips the pixel codec under noise and covers:
+
+- the game-state sections the add-on pushes, and how the companion merges them
+- the quest database's availability filters
+- the guide's lookup loop and answer labels
+- streamed speech over a mocked Fish WebSocket
+- announcement rate limits and combat hold
+- voice flags, structured answers, secret redaction, and waypoints
+
+No real provider is called. A real-service smoke test still needs personal provider keys and a running Forever client.
+
+To rebuild the offline quest database from the latest AllTheThings data, run `npm run build:quests`.
+
+## Data sources and credits
+
+- **Offline quest database:** converted from the [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) WoW: Forever data (MIT license; notice kept in [bridge/data/README.md](bridge/data/README.md)).
+- **Quest, NPC, item, and spell lookups:** Wowhead's public WoW: Forever tooltip and search data. Wowhead has no official API, so results are cached and requests kept small.
+- **Zone-to-map table:** generated from the Forever client's map tables on [wago.tools](https://wago.tools).
+- **Forever add-on API reference:** checked against the capture in [forever-addon-kit](https://github.com/Thunderz96/forever-addon-kit).
 
 ## Current delivery status
 
-This repository is a functioning source prototype and includes Electron packaging configuration. The provider-independent flow is implemented and tested. A signed public installer, store distribution, and hosted proxy for hiding shared production credentials are release work, not prerequisites for running the source build.
+This repository is a working source prototype, tested in game on the WoW: Forever beta (1.60.1), and includes Electron packaging configuration. A signed public installer, store distribution, and a hosted proxy for hiding shared production credentials are release work, not prerequisites for running the source build.
 
-Primary service references: [Deepgram Flux](https://developers.deepgram.com/docs/flux/quickstart), [Fish Audio TTS](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech), [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [GPT-4.1 Mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini), and [Gemma 4 on the Gemini API](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api).
+Primary service references: [Deepgram Flux](https://developers.deepgram.com/docs/flux/quickstart), [Fish Audio TTS](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech) and [streaming TTS](https://docs.fish.audio/api-reference/endpoint/websocket/tts-live), [GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna), [GPT-4.1 Mini](https://developers.openai.com/api/docs/models/gpt-4.1-mini), and [Gemma 4 on the Gemini API](https://ai.google.dev/gemma/docs/core/gemma_on_gemini_api).

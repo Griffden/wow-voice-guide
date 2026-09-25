@@ -7,6 +7,8 @@ let playbackContext = null;
 let playbackSource = null;
 let playbackGain = null;
 let voiceVolumePercent = 125;
+let streamGain = null;
+let speech = null; // streamed reply: { id, nextTime, sources, carry, ended }
 
 const presets = {
   luna: { provider: 'openai-compatible', endpoint: 'https://api.openai.com/v1/chat/completions', model: 'gpt-6-luna', reasoningEffort: 'none' },
@@ -55,10 +57,91 @@ function setStatus(value) {
 function setVoiceVolume(value) {
   const n = Number(value);
   voiceVolumePercent = Number.isFinite(n) ? Math.max(0, Math.min(200, Math.round(n))) : 125;
-  if (playbackGain && playbackContext) {
-    playbackGain.gain.setTargetAtTime(voiceVolumePercent / 100, playbackContext.currentTime, 0.015);
+  for (const gain of [playbackGain, streamGain]) {
+    if (gain && playbackContext) gain.gain.setTargetAtTime(voiceVolumePercent / 100, playbackContext.currentTime, 0.015);
   }
 }
+
+// Gain followed by a limiter, so volumes above 100% don't clip harshly.
+function outputChain(context) {
+  const gain = context.createGain();
+  const limiter = context.createDynamicsCompressor();
+  gain.gain.value = voiceVolumePercent / 100;
+  limiter.threshold.value = -1;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.12;
+  gain.connect(limiter).connect(context.destination);
+  return gain;
+}
+
+// ---------------------------------------------------------------------------
+// Streamed speech: PCM chunks scheduled back to back on one Web Audio clock,
+// so playback starts with the first sentence Fish synthesizes.
+// ---------------------------------------------------------------------------
+
+function stopStream() {
+  if (!speech) return;
+  const old = speech;
+  speech = null;
+  for (const source of old.sources) { source.onended = null; try { source.stop(); } catch {} }
+}
+
+function stopElement() {
+  if (player) {
+    player.pause();
+    player.onended = null;
+  }
+}
+
+function streamDone() {
+  if (speech && speech.ended && speech.sources.size === 0) {
+    speech = null;
+    window.wowVoice.audioEnded();
+  }
+}
+
+async function playStreamChunk(value) {
+  playbackContext = playbackContext || new AudioContext();
+  if (playbackContext.state === 'suspended') await playbackContext.resume();
+  if (!streamGain) streamGain = outputChain(playbackContext);
+  if (!speech || speech.id !== value.streamId) {
+    stopElement();
+    stopStream();
+    setVoiceVolume(value.volumePercent ?? voiceVolumePercent);
+    speech = { id: value.streamId, nextTime: 0, sources: new Set(), carry: null, ended: false };
+  }
+  const bytes = Uint8Array.from(atob(value.base64), c => c.charCodeAt(0));
+  const { samples, carry } = window.WowVoiceAudio.pcm16ToFloat32(bytes, speech.carry);
+  speech.carry = carry;
+  if (!samples.length) return;
+  const buffer = playbackContext.createBuffer(1, samples.length, value.sampleRate || 44100);
+  buffer.copyToChannel(samples, 0);
+  const source = playbackContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(streamGain);
+  // A small lead on the first chunk absorbs network jitter between chunks.
+  const at = Math.max(playbackContext.currentTime + (speech.sources.size ? 0.01 : 0.08), speech.nextTime);
+  source.start(at);
+  speech.nextTime = at + buffer.duration;
+  speech.sources.add(source);
+  const current = speech;
+  source.onended = () => {
+    current.sources.delete(source);
+    if (speech === current) streamDone();
+  };
+}
+
+window.wowVoice.on('audio:stream', value => {
+  playStreamChunk(value).catch(error => setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` }));
+});
+window.wowVoice.on('audio:stream-end', value => {
+  if (!speech || speech.id !== value.streamId) return;
+  if (value.cancelled) { stopStream(); window.wowVoice.audioEnded(); return; }
+  speech.ended = true;
+  streamDone();
+});
 
 async function startCapture() {
   await stopCapture();
@@ -97,8 +180,15 @@ async function stopCapture() {
   await old.context.close();
 }
 
+const ANNOUNCE_BOXES = { quest: 'announceQuest', level: 'announceLevel', zone: 'announceZone', bags: 'announceBags', narrate: 'announceNarrate' };
+
+function applyAnnounce(announce) {
+  for (const [kind, id] of Object.entries(ANNOUNCE_BOXES)) $(id).checked = !!(announce && announce[kind] === true);
+}
+
 function applyConfig(config) {
   const dg = config.deepgram || {}, fish = config.fish || {}, llm = config.llm || {};
+  applyAnnounce(config.announce);
   setVoiceVolume((config.audio || {}).volumePercent ?? 125);
   $('deepgramKey').value = dg.apiKey || '';
   $('deepgramModel').value = dg.model || 'flux-general-en';
@@ -108,6 +198,8 @@ function applyConfig(config) {
   syncFishVoicePreset();
   $('fishModel').value = fish.model || 's2.1-pro-free';
   $('fishLatency').value = fish.latency || 'balanced';
+  $('fishStream').checked = fish.stream !== false;
+  $('fishFiller').checked = fish.filler !== false;
   $('llmKey').value = llm.apiKey || '';
   $('llmEndpoint').value = llm.endpoint || '';
   $('llmModel').value = llm.model || '';
@@ -126,8 +218,9 @@ $('settings').addEventListener('submit', async event => {
   const p = presets[$('llmPreset').value];
   const updated = await window.wowVoice.saveConfig({
     deepgram: { apiKey: $('deepgramKey').value.trim(), model: $('deepgramModel').value.trim(), eotThreshold: Number($('eotThreshold').value) },
-    fish: { apiKey: $('fishKey').value.trim(), voiceId: $('fishVoice').value.trim(), model: $('fishModel').value, latency: $('fishLatency').value },
+    fish: { apiKey: $('fishKey').value.trim(), voiceId: $('fishVoice').value.trim(), model: $('fishModel').value, latency: $('fishLatency').value, stream: $('fishStream').checked, filler: $('fishFiller').checked },
     llm: { ...p, apiKey: $('llmKey').value.trim(), endpoint: $('llmEndpoint').value.trim(), model: $('llmModel').value.trim() },
+    announce: Object.fromEntries(Object.entries(ANNOUNCE_BOXES).map(([kind, id]) => [kind, $(id).checked])),
   });
   applyConfig(updated);
   $('saved').textContent = 'Saved';
@@ -154,6 +247,7 @@ window.wowVoice.on('guide:sources', value => {
   $('guideSources').hidden = box.childElementCount === 0;
 });
 window.wowVoice.on('audio:volume', value => setVoiceVolume(value && value.volumePercent));
+window.wowVoice.on('config:announce', applyAnnounce);
 window.wowVoice.on('log', line => {
   const log = $('log');
   log.textContent = (log.textContent + line + '\n').slice(-20000);
@@ -161,24 +255,16 @@ window.wowVoice.on('log', line => {
 });
 window.wowVoice.on('audio:play', async value => {
   setVoiceVolume(value.volumePercent ?? voiceVolumePercent);
-  if (player) {
-    player.pause();
-    player.onended = null;
-  }
+  stopElement();
+  stopStream();
   if (playbackSource) playbackSource.disconnect();
   player = new Audio(`data:${value.mime};base64,${value.base64}`);
   playbackContext = playbackContext || new AudioContext();
   if (playbackContext.state === 'suspended') await playbackContext.resume();
   playbackSource = playbackContext.createMediaElementSource(player);
-  playbackGain = playbackContext.createGain();
-  const limiter = playbackContext.createDynamicsCompressor();
-  playbackGain.gain.value = voiceVolumePercent / 100;
-  limiter.threshold.value = -1;
-  limiter.knee.value = 0;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.003;
-  limiter.release.value = 0.12;
-  playbackSource.connect(playbackGain).connect(limiter).connect(playbackContext.destination);
+  if (playbackGain) playbackGain.disconnect();
+  playbackGain = outputChain(playbackContext);
+  playbackSource.connect(playbackGain);
   player.addEventListener('ended', () => window.wowVoice.audioEnded(), { once: true });
   player.play().catch(error => setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` }));
 });

@@ -33,7 +33,7 @@ function newVM() {
   };
   const num = (expr) => Number(evaluate(expr));
   run(fs.readFileSync(path.join(__dirname, 'wow_stub.lua'), 'utf8'));
-  for (const f of ['Codec.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
+  for (const f of ['Codec.lua', 'GameState.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
   return { run, evaluate, num };
 }
 
@@ -73,9 +73,11 @@ function stripRecords(vm) {
   if (!frame) return [];
   return frame.text.split('\x1E').map(r => {
     const p = r.split('\x1F');
-    const withCtx = p[4].split(';').includes('c'); // a "c" flag means field 7 is the game context
+    const flags = p[4].split(';');
+    const withCtx = flags.includes('c') || flags.includes('s'); // field 7 is the game context (c) or state sections (s)
     const rec = { session: p[0], chat: p[1], id: Number(p[2]), cwd: p[3], flags: p[4], name: p[5], text: p.slice(withCtx ? 7 : 6).join('\x1F') };
-    if (withCtx) rec.ctx = p[6];
+    if (flags.includes('c')) rec.ctx = p[6];
+    if (flags.includes('s')) rec.state = p[6];
     return rec;
   });
 }
@@ -116,78 +118,197 @@ test('hello goes out on the strip after login', () => {
   login(vm);
   vm.run('STUB.RunTimers()'); // C_Timer.After(3, SayHello)
   const recs = stripRecords(vm);
-  assert.equal(recs.length, 1);
-  assert.equal(recs[0].flags, 'h;vol=125;c', 'a hello carries game context and the saved voice volume');
+  assert.equal(recs.length, 1, 'game state waits until the bridge has answered');
+  assert.equal(recs[0].flags, 'h;vol=125', 'a hello carries the saved voice volume');
   assert.equal(recs[0].text, '');
   assert.equal(recs[0].session, vm.evaluate('WoWClaudeDB.session'));
 });
 
-test('the game context describes the character and rides on the hello, then only when it changes or is turned off', () => {
+// Every game state section on the strip, merged in record order like the bridge does.
+function stateOnStrip(vm) {
+  const sections = {};
+  const records = stripRecords(vm).filter(r => r.state !== undefined);
+  for (const rec of records) {
+    for (const part of rec.state.split('\x1C')) {
+      const [key, ...rest] = part.split('\x1D');
+      if (key === '*') { for (const k of Object.keys(sections)) delete sections[k]; sections['*'] = true; continue; }
+      sections[key] = rest.join('\x1D');
+    }
+  }
+  return { sections, records };
+}
+
+// Let every section record count as delivered (a few seconds on screen).
+function deliverState(vm) {
+  vm.run('STUB.now = STUB.now + 4; STUB.Tick()');
+}
+
+test('after the hello, every game state section goes out in section records, then only what changes', () => {
   const vm = newVM();
+  vm.run(`
+    STUB.quests = { { questID = 94946, title = "The Magical City of Dalaran" } }
+    STUB.questObjectives[94946] = { { text = "Talk to Dalaran City Guide", finished = false } }
+  `);
   login(vm);
-  vm.run('STUB.RunTimers()');
-  const hello = stripRecords(vm)[0];
-  assert.deepEqual(hello.ctx.split('\n'), [
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  const { sections, records } = stateOnStrip(vm);
+  assert.ok(records.every(r => r.flags === 's' && r.text === ''), 'section records carry no text');
+  assert.ok(records.every(r => r.state.length <= 1600), 'each record stays within its budget');
+  assert.equal(sections['*'], true, 'a full resend replaces whatever the bridge had');
+  assert.deepEqual(sections.char.split('\n'), [
     'Game: World of Warcraft: Forever (client 1.60.1.69913, interface 16001)',
     'Character: Testchar on Test Realm, level 23 Night Elf Hunter (Alliance), guild <Test Guild>',
-    'Location: Duskwood - Darkshire',
-    'Position: 45.2, 67.8 (map 1431)',
-    'Money: 1g 23s 45c; XP: 1234/5000',
-    'Talents: Beast Mastery 10 / Marksmanship 5 / Survival 0',
-    'Professions: Skinning 75/75, First Aid 40/75',
+    'Hearthstone: Darkshire',
   ]);
-  // The bridge answers the hello: the context is now known to be on its side.
-  nextSlot(vm, '{ now = time(), cwd = "", replies = {} }');
-  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
-  assert.equal(vm.evaluate('WoWClaude.IsConnected()'), 'true');
-  vm.run('WoWClaude.Send("hello world")');
-  let rec = stripRecords(vm).find(r => r.text === 'hello world');
-  assert.equal(rec.flags, '', 'unchanged context is not repeated');
-  assert.equal(rec.ctx, undefined);
-  assert.equal(vm.evaluate('WoWClaudeDB.outbox.ctx'), null);
-  // Moving to another zone changes it, so the next message (from another chat,
-  // the first one is still waiting) carries the new version.
-  vm.run('STUB.zone = "Elwynn Forest"; STUB.subzone = ""; STUB.posX = 0.1; WoWClaude.NewChat("Second"); WoWClaude.Send("where am I")');
-  rec = stripRecords(vm).find(r => r.text === 'where am I');
-  assert.equal(rec.flags, 'c');
-  assert.ok(rec.ctx.includes('Location: Elwynn Forest\n'), rec.ctx);
-  assert.ok(rec.ctx.includes('Position: 10.0, 67.8 on Duskwood (map 1431)'), 'the map name shows when it differs from the zone');
-  assert.equal(Buffer.from(vm.evaluate('WoWClaudeDB.outbox.ctx'), 'hex').toString('utf8'), rec.ctx, 'the reload path carries it too');
-  // Turning it off sends an empty context at once (a hello), so the bridge drops what it had.
-  vm.run('SlashCmdList.WOWCLAUDE("context off")');
-  assert.equal(vm.evaluate('WoWClaudeDB.settings.context'), 'false');
-  const off = stripRecords(vm).filter(r => r.flags === 'h;vol=125;c');
-  assert.equal(off.length, 1);
-  assert.equal(off[0].ctx, '');
-  assert.ok(vm.evaluate('WoWClaudeDB.chats[2].history[#WoWClaudeDB.chats[2].history].text').includes('Game context is OFF'));
-  // Back on: another hello, with the context again.
-  vm.run('SlashCmdList.WOWCLAUDE("context on")');
-  const on = stripRecords(vm).filter(r => r.flags === 'h;vol=125;c');
-  assert.ok(on.some(r => r.ctx.includes('Character: Testchar')));
-  assert.ok(vm.evaluate('WoWClaudeDB.chats[2].history[#WoWClaudeDB.chats[2].history].text').includes('Game context is ON'));
+  assert.equal(sections.prog, 'Money: 1g 23s 45c; XP: 1234/5000');
+  assert.equal(sections.loc, 'Location: Duskwood - Darkshire\nPosition: 45.2, 67.8 (map 1431)');
+  assert.equal(sections.talents, 'Specialization: Beast Mastery\nTalents (4 points): Improved Aspect of the Hawk 3, Bestial Swiftness', 'spent talents from C_Traits, unspent nodes left out');
+  assert.equal(sections.prof, 'Professions: Skinning 75/75, First Aid 40/75', 'professions from C_SkillInfo');
+  assert.match(sections.quest, /^Only quest: The Magical City of Dalaran \(id 94946\)\nObjective: Talk to Dalaran City Guide$/);
+  assert.equal(sections.quests, 'Quest log (1): The Magical City of Dalaran (#94946) [Talk to Dalaran City Guide]');
+  assert.equal(sections.target, '', 'empty sections go out too, so the bridge drops stale ones');
+  assert.equal(sections.done, '7 completed in 1 chunks');
+  assert.equal(sections['done.1'], '1~2,2,2~1,lj', 'runs of ids, base 36 deltas');
+  // Delivered: the records leave the strip after a few seconds on screen.
+  deliverState(vm);
+  assert.equal(stateOnStrip(vm).records.length, 0);
+  // A zone change sends the location section alone.
+  vm.run('STUB.zone = "Elwynn Forest"; STUB.subzone = ""; STUB.posX = 0.1; STUB.FireEvent("ZONE_CHANGED_NEW_AREA"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  let next = stateOnStrip(vm);
+  assert.deepEqual(Object.keys(next.sections), ['loc']);
+  assert.equal(next.sections.loc, 'Location: Elwynn Forest\nPosition: 10.0, 67.8 on Duskwood (map 1431)', 'the map name shows when it differs from the zone');
+  deliverState(vm);
+  // An unchanged section is not sent again.
+  vm.run('STUB.FireEvent("PLAYER_MONEY"); STUB.now = STUB.now + 31; STUB.Tick()');
+  assert.equal(stateOnStrip(vm).records.length, 0);
+  // Walking a few map units re-sends the position on the next movement check.
+  vm.run('STUB.posX = 0.2; STUB.now = STUB.now + 21; STUB.Tick(); STUB.RunTimers(); STUB.Tick()');
+  next = stateOnStrip(vm);
+  assert.match(next.sections.loc, /Position: 20\.0, 67\.8/);
 });
 
-test('quest context includes the full log and prioritizes a selected quest over tracking', () => {
+test('a question goes out right behind the state it needs, and context off clears the bridge', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  vm.run('STUB.posX = 0.5; WoWClaude.Send("where am I")');
+  const recs = stripRecords(vm);
+  const question = recs.find(r => r.text === 'where am I');
+  assert.equal(question.flags, '', 'the question itself carries no context');
+  const state = recs.find(r => r.state !== undefined);
+  assert.ok(state.id < question.id, 'the state record is read first');
+  assert.match(state.state, /loc\x1DLocation: Duskwood - Darkshire\nPosition: 50\.0, 67\.8/);
+  assert.equal(vm.evaluate('WoWClaudeDB.outbox.ctx'), null, 'pixel mode keeps the outbox free of context');
+  deliverState(vm);
+  // Off: one record clearing everything, and nothing more while it stays off.
+  vm.run('SlashCmdList.WOWCLAUDE("context off")');
+  const off = stateOnStrip(vm);
+  assert.deepEqual(off.records.map(r => r.state), ['*\x1D']);
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.context'), 'false');
+  assert.ok(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text').includes('Game context is OFF'));
+  deliverState(vm);
+  vm.run('STUB.FireEvent("ZONE_CHANGED_NEW_AREA"); STUB.RunTimers(); STUB.Tick()');
+  assert.equal(stateOnStrip(vm).records.length, 0);
+  // On: everything again.
+  vm.run('SlashCmdList.WOWCLAUDE("context on")');
+  const on = stateOnStrip(vm);
+  assert.equal(on.sections['*'], true);
+  assert.match(on.sections.char, /Character: Testchar/);
+  assert.ok(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text').includes('Game context is ON'));
+});
+
+test('quest context: the focused quest in full, the log compact with completion state', () => {
   const vm = newVM();
   vm.run(`
     STUB.quests = {
       { isHeader = true, title = "Dalaran" },
-      { questID = 94946, title = "The Magical City of Dalaran", instructions = "Take the skycutter ship.", description = "Meet the guide." },
+      { questID = 94946, title = "The Magical City of Dalaran", instructions = "Take the skycutter ship.", description = "Meet the guide.", completion = "You made it." },
       { questID = 123, title = "Other Quest" },
     }
     STUB.selectedQuest = 94946
     STUB.trackedQuest = 123
-    STUB.questObjectives[94946] = { { text = "Talk to Dalaran City Guide", finished = false } }
+    STUB.readyQuests[94946] = true
+    STUB.waypointText[94946] = "Return to Archmage Khadgar"
+    STUB.questObjectives[94946] = { { text = "Talk to Dalaran City Guide", finished = true } }
+    STUB.questObjectives[123] = { { text = "0/8 Wolf Meat", finished = false }, { text = "1/1 Tooth", finished = true } }
   `);
   const context = vm.evaluate('WoWClaude.GameContext()');
-  assert.match(context, /Selected quest: The Magical City of Dalaran \(id 94946\)/);
-  assert.match(context, /Objective: Talk to Dalaran City Guide/);
-  assert.match(context, /Quest instructions: Take the skycutter ship/);
-  assert.match(context, /Quest log \(2\): The Magical City of Dalaran \(#94946\); Other Quest \(#123\)/);
+  assert.match(context, /Selected quest: The Magical City of Dalaran \(id 94946\)\nStatus: objectives complete, ready to turn in\nObjective: Talk to Dalaran City Guide \(complete\)\nNext step: Return to Archmage Khadgar\nQuest instructions: Take the skycutter ship\.\nTurn-in text: You made it\.\nQuest description: Meet the guide\./);
+  assert.match(context, /Quest log \(2\): The Magical City of Dalaran \(#94946\) \[ready to turn in\]; Other Quest \(#123\) \[0\/8 Wolf Meat\]/);
+  assert.match(context, /Completed quests: 7/);
   vm.run('STUB.selectedQuest = 0; STUB.trackedQuest = 0');
   assert.doesNotMatch(vm.evaluate('WoWClaude.GameContext()'), /(?:Selected|Tracked|Only) quest:/);
   vm.run('STUB.quests[3] = nil');
   assert.match(vm.evaluate('WoWClaude.GameContext()'), /Only quest: The Magical City of Dalaran/);
+});
+
+test('NPC dialogs, the target, flight paths, gear and turn-ins become sections as their events fire', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  // Gossip is read while the frame is open.
+  vm.run(`
+    STUB.npcName = "Marshal Dughan"
+    STUB.gossip = { text = "Ach, it's hard enough keeping order.", available = { { title = "Wolves Across the Border", questID = 33 } },
+      active = { { title = "The Fargodeep Mine", questID = 62, isComplete = true } }, options = { { name = "I want to browse your goods." } } }
+    STUB.FireEvent("GOSSIP_SHOW"); STUB.gossip = nil; STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  let s = stateOnStrip(vm).sections;
+  assert.equal(s.npc, [
+    'Talking to: Marshal Dughan',
+    "Says: Ach, it's hard enough keeping order.",
+    'Offers quests: Wolves Across the Border (#33)',
+    'Your quests with this NPC: The Fargodeep Mine (#62) [complete]',
+    'Dialog options: I want to browse your goods.',
+  ].join('\n'));
+  deliverState(vm);
+  vm.run(`STUB.questDialog = { title = "Wolves Across the Border", id = 33, text = "Those wolves are a menace.", objective = "Bring 8 Tough Wolf Meat." }
+    STUB.FireEvent("QUEST_DETAIL"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  s = stateOnStrip(vm).sections;
+  assert.equal(s.npc, 'Talking to: Marshal Dughan\nOffers quest: Wolves Across the Border (#33)\nQuest text: Those wolves are a menace.\nObjectives: Bring 8 Tough Wolf Meat.');
+  deliverState(vm);
+  // The target: who, never how healthy.
+  vm.run(`STUB.target = { name = "Hogger", level = 11, classification = "elite", creatureType = "Humanoid", reaction = 2, guid = "Creature-0-1-2-3-448-0000ABCD" }
+    STUB.FireEvent("PLAYER_TARGET_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  s = stateOnStrip(vm).sections;
+  assert.equal(s.target, 'Target: Hogger, level 11 elite Humanoid, hostile (npc 448)');
+  deliverState(vm);
+  // Flight paths are cached when the flight map opens.
+  vm.run(`STUB.taxiNodes = { { name = "Rut'theran Village, Teldrassil", state = 0 }, { name = "Auberdine, Darkshore", state = 1 }, { name = "Astranaar, Ashenvale", state = 2 } }
+    STUB.FireEvent("TAXIMAP_OPENED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  s = stateOnStrip(vm).sections;
+  assert.equal(s.taxi, "Known flight paths (2): Auberdine, Darkshore; Rut'theran Village, Teldrassil");
+  deliverState(vm);
+  // Gear: names, item levels, low durability, bag space.
+  vm.run(`STUB.gear = { [5] = { link = "|cff1eff00|Hitem:2140|h[Fine Chestpiece]|h|r", cur = 9, max = 60 }, [16] = { link = "|Hitem:2|h[Old Sword]|h", cur = 50, max = 50 } }
+    STUB.ilvl = { ["|cff1eff00|Hitem:2140|h[Fine Chestpiece]|h|r"] = 19 }
+    STUB.avgIlvl = 14.6; STUB.freeSlots = 2
+    STUB.FireEvent("PLAYER_EQUIPMENT_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  s = stateOnStrip(vm).sections;
+  assert.equal(s.gear, 'Average item level: 15\nLow durability: Chest 15%\nBags: 2 of 16 slots free\nEquipped: Chest Fine Chestpiece (19); Main hand Old Sword');
+  deliverState(vm);
+  // A turn-in goes out as a small delta, not the whole completed list.
+  vm.run('STUB.FireEvent("QUEST_TURNED_IN", 62, 100, 0); STUB.now = STUB.now + 6; STUB.RunTimers()');
+  s = stateOnStrip(vm).sections;
+  assert.equal(s['done.new'], '1q');
+  assert.equal(s['done.1'], undefined);
+  assert.equal(vm.evaluate('STUB.healthRead'), null, 'no health was ever read');
+});
+
+test('completed quest ids compress into runs and split into chunks that decode on their own', () => {
+  const vm = newVM();
+  vm.run('CHUNKS, COUNT = WoWClaude_State.EncodeIds({ 10, 11, 12, 13, 50, 9000, 9001, 50 }, 1000)');
+  assert.equal(vm.evaluate('COUNT'), '7');
+  assert.equal(vm.evaluate('table.concat(CHUNKS, "|")'), 'a~3,11,6wm~1');
+  vm.run('local ids = {} for i = 1, 3000, 2 do ids[#ids + 1] = i end CHUNKS = WoWClaude_State.EncodeIds(ids, 200)');
+  assert.ok(vm.num('#CHUNKS') > 5);
+  vm.run('OK = true for _, c in ipairs(CHUNKS) do if #c > 200 then OK = false end end');
+  assert.equal(vm.evaluate('OK'), 'true');
+  assert.match(vm.evaluate('CHUNKS[2]'), /^[0-9a-z]{2,},2,2/, 'each chunk starts with an absolute id');
 });
 
 test('a shift-clicked link lands in the focused input and is sent as its name plus tooltip', () => {
@@ -269,7 +390,7 @@ test('until the bridge answers, Connect replaces Send and a message stays in the
   assert.equal(vm.evaluate('WoWClaudeInput:GetText()'), 'fix the bug', 'message kept in the box');
   const hello = stripRecords(vm);
   assert.equal(hello.length, 1);
-  assert.equal(hello[0].flags, 'h;vol=125;c', 'a hello went out instead');
+  assert.equal(hello[0].flags, 'h;vol=125', 'a hello went out instead');
   assert.ok(texts().includes('Connecting...'));
   assert.ok(texts().includes('your message goes out as soon as it answers'));
   // No answer within CONNECT_WAIT: the attempt is reported as failed, Connect is back.
@@ -595,4 +716,76 @@ test('reload mode writes the outbox for the bridge instead of drawing the strip'
   assert.equal(vm.evaluate('WoWClaudeDB.outbox.newSession'), 'true');
   assert.equal(vm.evaluate('WoWClaudeDB.outbox.text'), Buffer.from('via reload').toString('hex'));
   assert.equal(decodeStrip(vm), null);
+});
+
+// Announcement records ("a"): their fields, decoded like the bridge does.
+function announcements(vm) {
+  return stripRecords(vm).filter(r => r.flags === 'a').map(r => Object.fromEntries(r.text.split('\x1C').map(p => p.split('\x1D'))));
+}
+
+test('announcement moments go to the companion: quest ready, level up, new zone, bags, durability, accepted quest', () => {
+  const vm = newVM();
+  vm.run(`STUB.quests = { { questID = 33, title = "Wolves Across the Border", description = "Those wolves are a menace.", instructions = "Bring 8 Tough Wolf Meat." } }`);
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  const fire = ev => { vm.run(ev); vm.run('STUB.RunTimers()'); };
+  // The first quest log look only takes note; the next change announces.
+  fire('STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.equal(announcements(vm).length, 0);
+  fire('STUB.readyQuests[33] = true; STUB.waypointText[33] = "Return to Marshal Dughan"; STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.deepEqual(announcements(vm), [{ kind: 'quest', id: '33', title: 'Wolves Across the Border', next: 'Return to Marshal Dughan' }]);
+  deliverState(vm);
+  fire('STUB.FireEvent("QUEST_LOG_UPDATE")');
+  assert.equal(announcements(vm).length, 0, 'announced once');
+  fire('STUB.levelSpells = { [24] = { 19552 } }; STUB.FireEvent("PLAYER_LEVEL_UP", 24)');
+  assert.deepEqual(announcements(vm)[0], { kind: 'level', level: '24', spells: 'Improved Aspect of the Hawk' });
+  deliverState(vm);
+  fire('STUB.zone = "Westfall"; STUB.FireEvent("ZONE_CHANGED_NEW_AREA")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'zone', zone: 'Westfall', map: '1431' });
+  deliverState(vm);
+  fire('STUB.freeSlots = 1; STUB.FireEvent("BAG_UPDATE_DELAYED")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'bags', free: '1', total: '16' });
+  deliverState(vm);
+  fire('STUB.FireEvent("BAG_UPDATE_DELAYED")');
+  assert.equal(announcements(vm).length, 0, 'not again until the bags were emptied');
+  fire('STUB.gear = { [5] = { link = "|Hitem:1|h[Chest]|h", cur = 6, max = 60 } }; STUB.FireEvent("UPDATE_INVENTORY_DURABILITY")');
+  assert.deepEqual(announcements(vm)[0], { kind: 'repair', percent: '10', slot: 'Chest' });
+  deliverState(vm);
+  fire('STUB.FireEvent("QUEST_ACCEPTED", 33)');
+  assert.deepEqual(announcements(vm)[0], { kind: 'accept', id: '33', title: 'Wolves Across the Border', text: 'Those wolves are a menace.', objectives: 'Bring 8 Tough Wolf Meat.' });
+});
+
+test('announcements wait out combat, respect in-game switches, and follow the companion settings in slot files', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  vm.run('STUB.combat = true; STUB.levelSpells = {}; STUB.FireEvent("PLAYER_LEVEL_UP", 24)');
+  assert.equal(announcements(vm).length, 0, 'nothing in combat');
+  vm.run('STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(announcements(vm)[0].kind, 'level', 'sent once combat ends');
+  deliverState(vm);
+  // A moment older than a minute when combat ends is dropped.
+  vm.run('STUB.combat = true; STUB.FireEvent("PLAYER_LEVEL_UP", 25); STUB.now = STUB.now + 90; STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(announcements(vm).length, 0);
+  // Switched in game: the companion is told, and this side stops sending.
+  vm.run('SlashCmdList.WOWCLAUDE("announce level off")');
+  const rec = stripRecords(vm).find(r => r.flags.startsWith('ann='));
+  assert.equal(rec.flags, 'ann=level:0');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /level - level up and new trainer spells: off/);
+  deliverState(vm);
+  vm.run('STUB.FireEvent("PLAYER_LEVEL_UP", 26)');
+  assert.equal(announcements(vm).length, 0);
+  vm.run('SlashCmdList.WOWCLAUDE("narrate on")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=narrate:1'));
+  vm.run('SlashCmdList.WOWCLAUDE("announce all on")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1'));
+  // The companion's settings arrive with the next slot.
+  nextSlot(vm, '{ now = time(), cwd = "", replies = {}, announce = { quest = true, level = false, zone = false, bags = false, narrate = false } }');
+  vm.run('WoWClaude.Connect(); STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.level'), 'false');
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.quest'), 'true');
 });

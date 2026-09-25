@@ -22,5 +22,25 @@
     return out;
   }
 
-  return { downsampleTo16k };
+  // Streamed speech arrives as mono signed 16-bit little-endian PCM in chunks
+  // that may split a sample; the odd byte is carried to the next chunk.
+  function pcm16ToFloat32(bytes, carry) {
+    let data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    if (carry && carry.length) {
+      const joined = new Uint8Array(carry.length + data.length);
+      joined.set(carry, 0);
+      joined.set(data, carry.length);
+      data = joined;
+    }
+    const count = Math.floor(data.length / 2);
+    const out = new Float32Array(count);
+    for (let i = 0; i < count; i++) {
+      let v = data[2 * i] | (data[2 * i + 1] << 8);
+      if (v >= 0x8000) v -= 0x10000;
+      out[i] = v / 32768;
+    }
+    return { samples: out, carry: data.slice(count * 2) };
+  }
+
+  return { downsampleTo16k, pcm16ToFloat32 };
 });

@@ -14,6 +14,7 @@ let win = null;
 let bridge = null;
 let flux = null;
 let cfg = {};
+let speakingStream = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Voice capture is initiated by the in-game hotkey, not a click inside this
@@ -37,6 +38,7 @@ function publicConfig() {
     fish: c.fish || {},
     llm: c.llm || {},
     audio: c.audio || {},
+    announce: c.announce || {},
     capture: c.capture || {},
   };
 }
@@ -47,6 +49,7 @@ function writeConfig(update) {
   current.fish = { ...(current.fish || {}), ...(update.fish || {}) };
   current.llm = { ...(current.llm || {}), ...(update.llm || {}) };
   current.audio = { ...(current.audio || {}), ...(update.audio || {}) };
+  current.announce = { ...(current.announce || {}), ...(update.announce || {}) };
   const tmp = CONFIG_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(current, null, 2) + '\n');
   fs.renameSync(tmp, CONFIG_FILE);
@@ -179,6 +182,11 @@ function onBridgeMessage(message) {
   if (!message || !message.type) return;
   if (message.type === 'voice:start') startFlux(message);
   else if (message.type === 'voice:cancel') closeFlux('Listening cancelled.', true);
+  else if (message.type === 'config:announce') {
+    // Switched in game (/wow-claude announce ...): keep it and show it in Settings.
+    writeConfig({ announce: message.announce || {} });
+    ui('config:announce', cfg.announce);
+  }
   else if (message.type === 'voice:volume') {
     const volumePercent = Math.max(0, Math.min(200, Math.round(Number(message.volumePercent) || 0)));
     writeConfig({ audio: { volumePercent } });
@@ -196,6 +204,20 @@ function onBridgeMessage(message) {
       });
       ui('status', { state: 'speaking', text: 'Speaking…' });
     } catch (e) { log(`audio playback file failed: ${e.message}`); }
+  } else if (message.type === 'audio:chunk') {
+    // Streamed speech: PCM chunks straight to the renderer's Web Audio queue.
+    if (message.streamId !== speakingStream) {
+      speakingStream = message.streamId;
+      ui('status', { state: 'speaking', text: 'Speaking…' });
+    }
+    ui('audio:stream', {
+      streamId: message.streamId,
+      sampleRate: message.sampleRate,
+      base64: message.base64,
+      volumePercent: ((cfg.audio || {}).volumePercent ?? 125),
+    });
+  } else if (message.type === 'audio:end') {
+    ui('audio:stream-end', { streamId: message.streamId, cancelled: !!message.cancelled });
   } else if (message.type === 'status') ui('status', message.status);
   else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources });
 }

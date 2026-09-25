@@ -42,6 +42,7 @@ local TICK_SECONDS = 2
 local CONNECT_WAIT = 15 -- seconds the Connect button waits for the bridge before giving up
 local IDLE_POLL_SECONDS = 600 -- without the sound channel, spend one slot this often while idle to check the bridge
 local RS, US = "\30", "\31" -- record / unit separators in the strip payload
+local STATE_SHOW = 3 -- seconds a game state record stays drawn when no ack can be heard
 
 local db
 local ui = {}
@@ -318,13 +319,17 @@ local function ShowStrip(id, payload)
 end
 
 -- Record: session, chat, id, cwd, flags, name, [context,] text. Several records
--- per frame. The context field is only present when the flags carry "c", so the
--- bridge can tell it from a separator inside the text.
+-- per frame. The context field is only present when the flags carry "c" (one
+-- context string, the reload-era format) or "s" (game state sections, see
+-- FlushState), so the bridge can tell it from a separator inside the text.
 local function RecordFor(id, rec)
 	local name = (rec.name or ""):gsub("[\30\31]", " ")
 	local flags = rec.flags or ""
 	local fields = { db.session, rec.chat, tostring(id), rec.cwd, flags, name }
-	if rec.ctx ~= nil then
+	if rec.state ~= nil then
+		fields[5] = flags == "" and "s" or (flags .. ";s")
+		table.insert(fields, (rec.state:gsub("[\30\31]", " ")))
+	elseif rec.ctx ~= nil then
 		fields[5] = flags == "" and "c" or (flags .. ";c")
 		table.insert(fields, (rec.ctx:gsub("[\30\31]", " ")))
 	end
@@ -343,13 +348,21 @@ local function RefreshStrip()
 		return
 	end
 	table.sort(ids)
-	-- Newest first; drop the oldest if the frame would overflow.
-	local parts, size, latest = {}, 0, ids[#ids]
+	-- Newest first; drop the oldest if the frame would overflow. drawnSince
+	-- says how long a record has really been on screen (section records count
+	-- as delivered after a few seconds there when no ack can be heard).
+	local parts, size, latest, full = {}, 0, ids[#ids], false
 	for i = #ids, 1, -1 do
-		local r = RecordFor(ids[i], run.outbound[ids[i]])
-		if size + #r + 1 > Codec.MAX_PAYLOAD then break end
-		table.insert(parts, 1, r)
-		size = size + #r + 1
+		local rec = run.outbound[ids[i]]
+		local r = RecordFor(ids[i], rec)
+		if full or size + #r + 1 > Codec.MAX_PAYLOAD then
+			full = true
+			rec.drawnSince = nil
+		else
+			table.insert(parts, 1, r)
+			size = size + #r + 1
+			rec.drawnSince = rec.drawnSince or GetTime()
+		end
 	end
 	ShowStrip(latest, table.concat(parts, RS))
 end
@@ -748,6 +761,7 @@ local function TryLoadSlot(why)
 	if type(data) == "table" and type(data.cwd) == "string" and data.cwd ~= "" then run.bridgeCwd = data.cwd end
 	local matched = ApplyReplies(type(data) == "table" and data.replies or nil)
 	if type(data) == "table" and data.restore then ImportRestore(data.restore) end
+	if type(data) == "table" then WoWClaude.ApplyAnnounceSettings(data.announce) end
 	if why == "signal" and not matched then
 		run.signalUnreliable = true
 	end
@@ -769,6 +783,8 @@ local function Tick()
 	WoWClaude.UpdateDot()
 	WoWClaude.CheckConnection()
 	if db.settings.mode ~= "pixel" then return end
+	if db.settings.context then WoWClaude.CheckMovement(now) end
+	WoWClaude.FlushState()
 	local changed = false
 	if run.helloPollAt and now >= run.helloPollAt then
 		run.helloPollAt = nil
@@ -796,11 +812,17 @@ local function Tick()
 			NoteAcked(rec)
 			changed = true
 		end
+		-- Game state: the bridge reads the strip four times a second, so a few
+		-- seconds on screen is delivery even without the sound channel.
+		if rec.stateRec and not rec.acked and rec.drawnSince and now - rec.drawnSince >= STATE_SHOW then
+			NoteAcked(rec)
+			changed = true
+		end
 		if rec.acked then
 			if rec.forget then db.forget[rec.forget] = nil end
 			run.outbound[id] = nil
 			changed = true
-		elseif rec.hello and now - rec.sentAt >= 20 then
+		elseif (rec.hello or rec.stateRec) and now - rec.sentAt >= 20 then
 			run.outbound[id] = nil
 			changed = true
 		elseif now - rec.sentAt >= STRIP_SECONDS then
@@ -878,201 +900,449 @@ end
 -- Game context and links
 ---------------------------------------------------------------------------
 
--- Claude only sees text, so two things about the game are spelled out for it:
--- who is asking (the character, where they are; sent with the hello and again
--- when it changes, and put into Claude's system prompt by the bridge), and
--- what the player shift-clicked into the message (item, spell and quest links
--- are meaningless markup to Claude; their tooltips are what the player sees).
--- Every game API here is optional: whatever the client lacks is left out.
+-- The guide only sees text, so two things about the game are spelled out for it:
+-- who is asking and what is around them (game state sections, pushed as they
+-- change; see GameState.lua), and what the player shift-clicked into the
+-- message (item, spell and quest links are meaningless markup to a model;
+-- their tooltips are what the player sees).
 
-local CONTEXT_MAX = 1500 -- bytes of context per record; the strip has ~3.2 KB for everything
+local State = WoWClaude_State
+local Try = State.Try
 local LINK_LINES_MAX = 30 -- tooltip lines kept per link
 local LINK_BYTES_MAX = 900 -- bytes kept per link
+local CONTEXT_MAX = 1500 -- bytes of flattened context per reload-mode outbox
 
--- Call a game API that may not exist or may throw, and get its returns or nothing.
-local function Try(fn, ...)
-	if type(fn) ~= "function" then return nil end
-	local ok, a, b, c, d, e, f, g = pcall(fn, ...)
-	if ok then return a, b, c, d, e, f, g end
+-- Section records. A record flagged "s" carries changed sections instead of a
+-- context string: key GS value, joined by FS. An empty value deletes that
+-- section on the bridge; the key "*" clears them all (context off).
+local FS, GS = "\28", "\29"
+local STATE_RECORD_MAX = 1500 -- bytes of sections per record
+local STATE_DELAY = { default = 1.5, quests = 4, quest = 2, prog = 30, gear = 5, loc = 1, npc = 0.3, target = 0.5 }
+local MOVE_CHECK_SECONDS, MOVE_MIN = 20, 3 -- re-send the position after moving 3 map units
+local DONE_NEW_MAX = 300 -- bytes of turn-ins kept as a delta before the full list is re-sent
+
+local function StateRun()
+	run.state = run.state or { sent = {}, dirty = {}, doneNew = {} }
+	return run.state
 end
 
-local function Money(copper)
-	copper = tonumber(copper) or 0
-	local g, s, c = math.floor(copper / 10000), math.floor(copper / 100) % 100, copper % 100
-	if g > 0 then return g .. "g " .. s .. "s " .. c .. "c" end
-	if s > 0 then return s .. "s " .. c .. "c" end
-	return c .. "c"
+-- Build one section, or several for the completed-quest list.
+local function BuildSection(key, out)
+	local st = StateRun()
+	if key == "char" then out.char = State.Char()
+	elseif key == "prog" then out.prog = State.Progress()
+	elseif key == "loc" then
+		local text, mapId, x, y = State.Location()
+		out.loc = text
+		st.lastPos = { map = mapId, x = x, y = y }
+	elseif key == "quest" or key == "quests" then
+		out.quest, out.quests = State.Quests()
+	elseif key == "target" then out.target = State.Target()
+	elseif key == "npc" then out.npc = st.dialog or ""
+	elseif key == "talents" then out.talents = State.Talents()
+	elseif key == "prof" then out.prof = State.Professions()
+	elseif key == "taxi" then out.taxi = State.Taxi(db and db.taxi)
+	elseif key == "gear" then out.gear = State.Gear()
+	elseif key == "done" then
+		local ids = State.CompletedIds()
+		if ids then
+			local chunks, count = State.EncodeIds(ids, STATE_RECORD_MAX - 100)
+			out["done"] = count .. " completed in " .. #chunks .. " chunks"
+			for i, chunk in ipairs(chunks) do out["done." .. i] = chunk end
+			-- Chunks from a longer earlier list are dropped on the bridge.
+			for i = #chunks + 1, st.doneChunks or 0 do out["done." .. i] = "" end
+			st.doneChunks = #chunks
+			st.doneNew = {}
+			out["done.new"] = ""
+		end
+	elseif key == "done.new" then
+		out["done.new"] = table.concat(State.EncodeIds(st.doneNew, 100000), ",")
+	end
 end
 
--- A few lines about the game and the character, as the bridge will show them to Claude.
+-- Every section as the guide would see it, for /wow-claude context and the
+-- reload-mode outbox (which has no room for separate section records).
 function WoWClaude.GameContext()
+	local out = {}
+	for _, key in ipairs({ "char", "prog", "loc", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do BuildSection(key, out) end
 	local lines = {}
-	local version, build, _, toc = Try(GetBuildInfo)
-	toc = tonumber(toc)
-	local game = "World of Warcraft"
-	if toc and toc >= 16000 and toc < 20000 then game = "World of Warcraft: Forever" end
-	local client = ""
-	if version then
-		client = " (client " .. tostring(version) .. (build and ("." .. tostring(build)) or "") .. (toc and (", interface " .. toc) or "") .. ")"
+	for _, key in ipairs(State.ORDER) do
+		if out[key] and out[key] ~= "" then table.insert(lines, out[key]) end
 	end
-	table.insert(lines, "Game: " .. game .. client)
+	local ids = State.CompletedIds()
+	if ids then table.insert(lines, "Completed quests: " .. #ids) end
+	return table.concat(lines, "\n")
+end
 
-	local name = Try(UnitName, "player")
-	if name then
-		local realm = Try(GetRealmName)
-		local level = Try(UnitLevel, "player")
-		local race = Try(UnitRace, "player")
-		local class = Try(UnitClass, "player")
-		local faction = Try(UnitFactionGroup, "player")
-		local guild = Try(GetGuildInfo, "player")
-		local who = "Character: " .. tostring(name) .. (realm and (" on " .. tostring(realm)) or "")
-		local desc = {}
-		if level then table.insert(desc, "level " .. tostring(level)) end
-		if race then table.insert(desc, tostring(race)) end
-		if class then table.insert(desc, tostring(class)) end
-		if #desc > 0 then who = who .. ", " .. table.concat(desc, " ") end
-		if faction then who = who .. " (" .. tostring(faction) .. ")" end
-		if guild then who = who .. ", guild <" .. tostring(guild) .. ">" end
-		table.insert(lines, who)
+-- A flattened, size-limited context for the reload-mode outbox.
+local function FlatContext()
+	local lines = {}
+	for line in WoWClaude.GameContext():gmatch("[^\n]+") do table.insert(lines, line) end
+	return State.Fit(lines, CONTEXT_MAX)
+end
+
+-- Mark sections for sending after their delay. `delay` overrides the default.
+function WoWClaude.MarkState(keys, delay)
+	if not db then return end
+	local st = StateRun()
+	local now = GetTime()
+	if type(keys) == "string" then keys = { keys } end
+	local soonest
+	for _, key in ipairs(keys) do
+		local d = delay or STATE_DELAY[key] or STATE_DELAY.default
+		if not st.dirty[key] or st.dirty[key] > now + d then st.dirty[key] = now + d end
+		if not soonest or d < soonest then soonest = d end
 	end
+	if soonest and C_Timer then C_Timer.After(soonest + 0.05, function() WoWClaude.FlushState() end) end
+end
 
-	local zone = Try(GetZoneText)
-	local sub = Try(GetSubZoneText)
-	if zone and zone ~= "" then
-		table.insert(lines, "Location: " .. zone .. ((sub and sub ~= "" and sub ~= zone) and (" - " .. sub) or ""))
+-- Put one record of sections on the strip.
+local function QueueStateRecord(pairs_)
+	local parts = {}
+	for _, p in ipairs(pairs_) do table.insert(parts, p[1] .. GS .. p[2]) end
+	db.lastSeq = db.lastSeq + 1
+	local c = ActiveChat()
+	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "", name = c and c.name or "", text = "", state = table.concat(parts, FS), sentAt = GetTime(), stateRec = true }
+end
+
+-- Rebuild the due sections and send the ones whose text changed. `force`
+-- sends everything dirty now (a question is about to go out). Nothing is sent
+-- while the bridge is away or context is off; the sections stay dirty and the
+-- next hello sends everything anyway.
+function WoWClaude.FlushState(force)
+	if not db or db.settings.mode ~= "pixel" or not db.settings.context then return end
+	if not WoWClaude.IsConnected() then return end
+	local st = StateRun()
+	local now = GetTime()
+	local due, out = {}, {}
+	for key, at in pairs(st.dirty) do
+		if force or at <= now then table.insert(due, key) end
 	end
+	if #due == 0 then return end
+	table.sort(due)
+	for _, key in ipairs(due) do
+		st.dirty[key] = nil
+		BuildSection(key, out)
+	end
+	local changed = {}
+	-- A full resend replaces everything the bridge had, stale keys included.
+	if st.full then table.insert(changed, { "*", "" }) end
+	local keys = {}
+	for key in pairs(out) do table.insert(keys, key) end
+	table.sort(keys)
+	for _, key in ipairs(keys) do
+		local value = (out[key] or ""):gsub("[\28-\31]", " ")
+		if value ~= (st.sent[key] or "") or st.full then
+			table.insert(changed, { key, value })
+			st.sent[key] = value
+		end
+	end
+	st.full = nil
+	if #changed == 0 then return end
+	-- Pack into records of at most STATE_RECORD_MAX bytes.
+	local batch, size = {}, 0
+	for _, p in ipairs(changed) do
+		local cost = #p[1] + #p[2] + 2
+		if size + cost > STATE_RECORD_MAX and #batch > 0 then
+			QueueStateRecord(batch)
+			batch, size = {}, 0
+		end
+		table.insert(batch, p)
+		size = size + cost
+	end
+	if #batch > 0 then QueueStateRecord(batch) end
+	RefreshStrip()
+end
 
-	-- Map coordinates, as the minimap shows them (0-100 across the current map;
-	-- addons get no world x/y/z). Modern C_Map first, the vanilla call as fallback.
-	local x, y, mapName
+-- Everything again, replacing whatever the bridge had: after a hello, or when
+-- context is turned back on.
+function WoWClaude.SendFullState()
+	local st = StateRun()
+	st.sent = {}
+	st.full = true
+	local keys = { "char", "prog", "loc", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done" }
+	for _, key in ipairs(keys) do st.dirty[key] = GetTime() end
+	WoWClaude.FlushState(true)
+end
+
+-- Context off: one record that clears every section on the bridge.
+function WoWClaude.ClearState()
+	local st = StateRun()
+	st.sent, st.dirty = {}, {}
+	if db.settings.mode == "pixel" then
+		QueueStateRecord({ { "*", "" } })
+		RefreshStrip()
+	end
+end
+
+-- Walking around: re-send the position once the player moved a few map units.
+function WoWClaude.CheckMovement(now)
+	local st = StateRun()
+	if st.nextMoveCheck and now < st.nextMoveCheck then return end
+	st.nextMoveCheck = now + MOVE_CHECK_SECONDS
+	local last = st.lastPos
 	local mapId = Try(C_Map and C_Map.GetBestMapForUnit, "player")
-	if type(mapId) == "number" then
-		local pos = Try(C_Map.GetPlayerMapPosition, mapId, "player")
-		if type(pos) == "table" and type(pos.x) == "number" and type(pos.y) == "number" then x, y = pos.x, pos.y end
-		local info = Try(C_Map.GetMapInfo, mapId)
-		if type(info) == "table" and type(info.name) == "string" then mapName = info.name end
+	local pos = type(mapId) == "number" and Try(C_Map.GetPlayerMapPosition, mapId, "player")
+	if type(pos) ~= "table" or type(pos.x) ~= "number" then return end
+	if not last or last.map ~= mapId or not last.x
+		or math.abs(pos.x - last.x) * 100 >= MOVE_MIN or math.abs(pos.y - last.y) * 100 >= MOVE_MIN then
+		WoWClaude.MarkState("loc", 0)
 	end
-	if not x then
-		local px, py = Try(GetPlayerMapPosition, "player")
-		if type(px) == "number" and type(py) == "number" then x, y = px, py end
-	end
-	if x and y and (x > 0 or y > 0) then
-		local where = (mapName and mapName ~= zone) and (" on " .. mapName) or ""
-		table.insert(lines, string.format("Position: %.1f, %.1f%s%s", x * 100, y * 100, where, mapId and (" (map " .. mapId .. ")") or ""))
-	end
+end
 
-	local progress = {}
-	local copper = Try(GetMoney)
-	if copper then table.insert(progress, "Money: " .. Money(copper)) end
-	local xp, xpMax = Try(UnitXP, "player"), Try(UnitXPMax, "player")
-	if type(xp) == "number" and type(xpMax) == "number" and xpMax > 0 then
-		table.insert(progress, "XP: " .. xp .. "/" .. xpMax)
-	end
-	if #progress > 0 then table.insert(lines, table.concat(progress, "; ")) end
+-- Game events -> the sections they change. Dialog, flight map and turn-in
+-- events are handled in OnStateEvent because they must read the game at once.
+local STATE_EVENTS = {
+	PLAYER_LEVEL_UP = { "char", "prog", "talents" },
+	PLAYER_XP_UPDATE = { "prog" },
+	UPDATE_EXHAUSTION = { "prog" },
+	PLAYER_UPDATE_RESTING = { "prog" },
+	PLAYER_MONEY = { "prog" },
+	HEARTHSTONE_BOUND = { "char" },
+	PLAYER_GUILD_UPDATE = { "char" },
+	ZONE_CHANGED_NEW_AREA = { "loc" },
+	ZONE_CHANGED = { "loc" },
+	ZONE_CHANGED_INDOORS = { "loc" },
+	QUEST_LOG_UPDATE = { "quests", "quest" },
+	QUEST_ACCEPTED = { "quests", "quest" },
+	QUEST_REMOVED = { "quests", "quest" },
+	QUEST_WATCH_UPDATE = { "quests", "quest" },
+	SUPER_TRACKING_CHANGED = { "quest" },
+	PLAYER_TARGET_CHANGED = { "target" },
+	TRAIT_CONFIG_UPDATED = { "talents" },
+	PLAYER_TALENT_UPDATE = { "talents" },
+	ACTIVE_PLAYER_SPECIALIZATION_CHANGED = { "talents" },
+	SKILL_LINES_CHANGED = { "prof" },
+	PLAYER_EQUIPMENT_CHANGED = { "gear" },
+	UPDATE_INVENTORY_DURABILITY = { "gear" },
+	BAG_UPDATE_DELAYED = { "gear" },
+}
+local DIALOG_EVENTS = { GOSSIP_SHOW = true, QUEST_DETAIL = true, QUEST_GREETING = true, QUEST_PROGRESS = true, QUEST_COMPLETE = true }
 
-	-- Opening the quest log does not necessarily select or super-track a quest.
-	-- Send a compact list as well, so voice questions can still identify the
-	-- player's quests. Prefer an explicitly selected quest over the HUD tracker.
-	local quests, questById = {}, {}
-	local entries = Try(C_QuestLog and C_QuestLog.GetNumQuestLogEntries)
-	if type(entries) == "number" then
-		for i = 1, math.min(entries, 100) do
-			local info = Try(C_QuestLog and C_QuestLog.GetInfo, i)
-			if type(info) == "table" and not info.isHeader and not info.isHidden
-				and type(info.questID) == "number" and info.questID > 0 then
-				local title = tostring(info.title or "Unknown"):gsub("[\r\n]", " "):sub(1, 70)
-				local quest = { id = info.questID, title = title, index = i }
-				table.insert(quests, quest)
-				questById[quest.id] = quest
-			end
-		end
-	end
-	local selectedId = Try(C_QuestLog and C_QuestLog.GetSelectedQuest)
-	local trackedId = Try(C_SuperTrack and C_SuperTrack.GetSuperTrackedQuestID)
-	local questId, focusKind
-	if type(selectedId) == "number" and selectedId > 0 then
-		questId, focusKind = selectedId, "Selected"
-	elseif type(trackedId) == "number" and trackedId > 0 then
-		questId, focusKind = trackedId, "Tracked"
-	elseif #quests == 1 then
-		questId, focusKind = quests[1].id, "Only"
-	end
-	if questId then
-		local quest = questById[questId]
-		local qname = (quest and quest.title) or Try(C_QuestLog and C_QuestLog.GetTitleForQuestID, questId)
-		table.insert(lines, focusKind .. " quest: " .. tostring(qname or "Unknown") .. " (id " .. questId .. ")")
-		local objectives = Try(C_QuestLog and C_QuestLog.GetQuestObjectives, questId)
-		if type(objectives) == "table" then
-			for i = 1, math.min(#objectives, 5) do
-				local objective = objectives[i]
-				if type(objective) == "table" and type(objective.text) == "string" then
-					table.insert(lines, "Objective: " .. objective.text:gsub("[\r\n]", " "):sub(1, 150) .. (objective.finished and " (complete)" or ""))
-				end
-			end
-		end
-		if quest and type(GetQuestLogQuestText) == "function" then
-			local description, instructions = Try(GetQuestLogQuestText, quest.index)
-			if type(instructions) == "string" and instructions ~= "" then
-				table.insert(lines, "Quest instructions: " .. instructions:gsub("[\r\n]", " "):sub(1, 220))
-			end
-			if type(description) == "string" and description ~= "" then
-				table.insert(lines, "Quest description: " .. description:gsub("[\r\n]", " "):sub(1, 260))
-			end
-		end
-	end
-	if #quests > 0 then
-		local names, prefix = {}, "Quest log (" .. #quests .. "): "
-		local room = CONTEXT_MAX - #table.concat(lines, "\n") - #prefix - 1
-		for i = 1, math.min(#quests, 25) do
-			local quest = quests[i]
-			local entry = quest.title .. " (#" .. quest.id .. ")"
-			if #entry + (i > 1 and 2 or 0) > room then break end
-			table.insert(names, entry)
-			room = room - #entry - (i > 1 and 2 or 0)
-		end
-		if #names > 0 then table.insert(lines, prefix .. table.concat(names, "; ")) end
-	end
+function WoWClaude.StateEvents()
+	local list = { "QUEST_TURNED_IN", "TAXIMAP_OPENED" }
+	for e in pairs(STATE_EVENTS) do table.insert(list, e) end
+	for e in pairs(DIALOG_EVENTS) do table.insert(list, e) end
+	table.sort(list)
+	return list
+end
 
-	-- Classic-style talent tabs: name, icon, points spent.
-	local tabs = Try(GetNumTalentTabs)
-	if type(tabs) == "number" and tabs > 0 then
-		local parts = {}
-		for i = 1, tabs do
-			local tname, _, points = Try(GetTalentTabInfo, i)
-			if type(tname) == "string" and type(points) == "number" then
-				table.insert(parts, tname .. " " .. points)
+-- Returns true when the event was one of ours.
+function WoWClaude.OnStateEvent(event, ...)
+	if not db then return false end
+	WoWClaude.AnnounceEvent(event, ...)
+	local st = StateRun()
+	if STATE_EVENTS[event] then
+		WoWClaude.MarkState(STATE_EVENTS[event])
+		return true
+	elseif DIALOG_EVENTS[event] then
+		-- The dialog API only answers while the frame is open: read it now.
+		st.dialog = State.Dialog(event)
+		WoWClaude.MarkState("npc")
+		return true
+	elseif event == "QUEST_TURNED_IN" then
+		local questId = ...
+		if type(questId) == "number" then
+			table.insert(st.doneNew, questId)
+			local encoded = table.concat(State.EncodeIds(st.doneNew, 100000), ",")
+			WoWClaude.MarkState(#encoded > DONE_NEW_MAX and "done" or "done.new")
+		end
+		WoWClaude.MarkState({ "quests", "quest" })
+		return true
+	elseif event == "TAXIMAP_OPENED" then
+		local mapId, names = State.TaxiNodes()
+		if #names > 0 then
+			db.taxi = db.taxi or {}
+			db.taxi[mapId] = names
+			WoWClaude.MarkState("taxi")
+		end
+		return true
+	end
+	return false
+end
+
+---------------------------------------------------------------------------
+-- Spoken announcements (opt-in; the companion speaks them)
+---------------------------------------------------------------------------
+
+-- A few game moments the companion can speak up about: a quest's objectives
+-- are done, a level up (and what the trainer has now), a new zone, bags nearly
+-- full or gear about to break, and a newly accepted quest read aloud. They are
+-- information only: nothing here acts for the player.
+--
+-- Whether each is spoken is the companion's setting (off by default). This
+-- side only sends the moment, in an "a" record, unless the player turned that
+-- kind off here; the slot files carry the companion's settings back
+-- (ApplyAnnounceSettings). Nothing is sent in combat: moments that happen
+-- then wait for PLAYER_REGEN_ENABLED and are dropped after a minute.
+
+local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate" }
+local ANNOUNCE_STALE = 60
+local BAGS_LOW, BAGS_OK = 2, 5 -- free slots: warn at 2 or fewer, again after 5 or more
+local WORN_LOW, WORN_OK = 20, 50 -- durability percent: warn at 20 or less, again after 50
+
+local function AnnounceToggle(kind)
+	if kind == "accept" then return "narrate" end
+	if kind == "repair" then return "bags" end
+	return kind
+end
+
+local function InCombat()
+	if InCombatLockdown and InCombatLockdown() then return true end
+	return Try(UnitAffectingCombat, "player") and true or false
+end
+
+local function SendAnnouncement(fields)
+	local parts = {}
+	for _, f in ipairs(fields) do table.insert(parts, f[1] .. GS .. tostring(f[2] or ""):gsub("[\28-\31]", " ")) end
+	db.lastSeq = db.lastSeq + 1
+	local c = ActiveChat()
+	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "a", name = c and c.name or "", text = table.concat(parts, FS), sentAt = GetTime(), stateRec = true }
+	RefreshStrip()
+end
+
+-- kind: quest | level | zone | bags | repair | accept; fields: { { key, value }, ... }
+function WoWClaude.Announce(kind, fields)
+	if not db or db.settings.mode ~= "pixel" then return end
+	local a = db.settings.announce
+	if a and a[AnnounceToggle(kind)] == false then return end
+	local out = { { "kind", kind } }
+	for _, f in ipairs(fields or {}) do table.insert(out, { f[1], State.Clean(f[2], 1000) }) end
+	if InCombat() then
+		run.announceLater = run.announceLater or {}
+		table.insert(run.announceLater, { at = GetTime(), fields = out })
+		return
+	end
+	if WoWClaude.IsConnected() then SendAnnouncement(out) end
+end
+
+-- Out of combat again: whatever is still recent goes out now.
+function WoWClaude.FlushAnnouncements()
+	local later = run.announceLater
+	run.announceLater = nil
+	if not later or InCombat() or not WoWClaude.IsConnected() then return end
+	for _, item in ipairs(later) do
+		if GetTime() - item.at <= ANNOUNCE_STALE then SendAnnouncement(item.fields) end
+	end
+end
+
+-- Quests whose objectives just became complete. The first look after login
+-- only takes note of what is already done.
+function WoWClaude.CheckQuestReady()
+	run.questCheckPending = nil
+	local quests = State.QuestList()
+	local first = run.readySeen == nil
+	local seen = {}
+	for _, q in ipairs(quests) do
+		if q.ready then
+			seen[q.id] = true
+			if not first and not run.readySeen[q.id] then
+				local step = Try(C_QuestLog and C_QuestLog.GetNextWaypointText, q.id)
+				WoWClaude.Announce("quest", { { "id", q.id }, { "title", q.title }, { "next", type(step) == "string" and step or "" } })
 			end
 		end
-		if #parts > 0 then table.insert(lines, "Talents: " .. table.concat(parts, " / ")) end
 	end
+	run.readySeen = seen
+end
 
-	-- Skill lines under the Professions and Secondary Skills headers.
-	local n = Try(GetNumSkillLines)
-	if type(n) == "number" then
-		local header, parts = nil, {}
-		local wanted = { [TRADE_SKILLS or "Professions"] = true, [SECONDARY_SKILLS or "Secondary Skills"] = true }
-		for i = 1, n do
-			local sname, isHeader, _, rank, _, _, maxRank = Try(GetSkillLineInfo, i)
-			if type(sname) == "string" then
-				if isHeader then
-					header = sname
-				elseif header and wanted[header] then
-					table.insert(parts, sname .. (rank and (" " .. tostring(rank) .. (maxRank and ("/" .. tostring(maxRank)) or "")) or ""))
-				end
+function WoWClaude.AnnounceEvent(event, ...)
+	if event == "QUEST_LOG_UPDATE" or event == "QUEST_WATCH_UPDATE" then
+		if not run.questCheckPending then
+			run.questCheckPending = true
+			C_Timer.After(1, WoWClaude.CheckQuestReady)
+		end
+	elseif event == "PLAYER_LEVEL_UP" then
+		local level = ...
+		if type(level) == "number" then
+			WoWClaude.Announce("level", { { "level", level }, { "spells", table.concat(State.LevelSpells(level), "; ") } })
+		end
+	elseif event == "ZONE_CHANGED_NEW_AREA" then
+		local zone = Try(GetZoneText)
+		if type(zone) == "string" and zone ~= "" and zone ~= run.lastZone then
+			local announce = run.lastZone ~= nil
+			run.lastZone = zone
+			local mapId = Try(C_Map and C_Map.GetBestMapForUnit, "player")
+			if announce then WoWClaude.Announce("zone", { { "zone", zone }, { "map", mapId or "" } }) end
+		end
+	elseif event == "BAG_UPDATE_DELAYED" then
+		local free, total = State.BagSpace()
+		if total > 0 and free <= BAGS_LOW and not run.bagsLow then
+			run.bagsLow = true
+			WoWClaude.Announce("bags", { { "free", free }, { "total", total } })
+		elseif free >= BAGS_OK then
+			run.bagsLow = nil
+		end
+	elseif event == "UPDATE_INVENTORY_DURABILITY" then
+		local pct, slot = State.LowestDurability()
+		if pct and pct <= WORN_LOW and not run.worn then
+			run.worn = true
+			WoWClaude.Announce("repair", { { "percent", pct }, { "slot", slot } })
+		elseif pct and pct >= WORN_OK then
+			run.worn = nil
+		end
+	elseif event == "QUEST_ACCEPTED" then
+		-- QUEST_ACCEPTED carries the quest id (older clients: log index, then id).
+		local a, b = ...
+		local questId = type(b) == "number" and b or a
+		if type(questId) == "number" then
+			local title, text, objectives = State.QuestStory(questId)
+			if title ~= "" or text ~= "" then
+				WoWClaude.Announce("accept", { { "id", questId }, { "title", title }, { "text", text }, { "objectives", objectives } })
 			end
 		end
-		if #parts > 0 then table.insert(lines, "Professions: " .. table.concat(parts, ", ")) end
 	end
+end
 
-	local kept, used = {}, 0
-	for _, line in ipairs(lines) do
-		line = line:gsub("[\30\31]", " ")
-		local cost = #line + (#kept > 0 and 1 or 0)
-		if used + cost > CONTEXT_MAX then break end
-		table.insert(kept, line)
-		used = used + cost
+-- The companion's switches, as the slot files report them.
+function WoWClaude.ApplyAnnounceSettings(settings)
+	if type(settings) ~= "table" or not db then return end
+	db.settings.announce = db.settings.announce or {}
+	for _, kind in ipairs(ANNOUNCE_KINDS) do
+		if settings[kind] ~= nil then db.settings.announce[kind] = settings[kind] and true or false end
 	end
-	return table.concat(kept, "\n")
+end
+
+-- /wow-claude announce [kind|all on|off], /wow-claude narrate [on|off]
+function WoWClaude.AnnounceCommand(cmd, rest)
+	local c = ActiveChat()
+	local kind, value = rest:lower():match("^(%S+)%s*(%S*)$")
+	if cmd == "narrate" then kind, value = "narrate", (kind or "") end
+	db.settings.announce = db.settings.announce or {}
+	local a = db.settings.announce
+	local changed = {}
+	if (value == "on" or value == "off") and kind then
+		for _, k in ipairs(ANNOUNCE_KINDS) do
+			if kind == "all" or kind == k then
+				a[k] = value == "on"
+				table.insert(changed, k .. ":" .. (a[k] and "1" or "0"))
+			end
+		end
+	end
+	if #changed > 0 and db.settings.mode == "pixel" then
+		-- The companion keeps the setting; it answers with it in the next slot.
+		db.lastSeq = db.lastSeq + 1
+		run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "ann=" .. table.concat(changed, ","), name = c and c.name or "", text = "", sentAt = GetTime(), stateRec = true }
+		RefreshStrip()
+	end
+	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud" }
+	local lines = { "Spoken announcements (off unless turned on here or in the companion's Settings; never in combat):" }
+	for _, k in ipairs(ANNOUNCE_KINDS) do
+		local state = a[k] == true and "on" or a[k] == false and "off" or "as set in the companion"
+		table.insert(lines, "  " .. k .. " - " .. names[k] .. ": " .. state)
+	end
+	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
+	AddHistory(c, "system", table.concat(lines, "\n"))
+	WoWClaude.Render()
+	WoWClaude.Toggle(true)
+end
+
+-- The reload path has no section records: its outbox carries the whole context
+-- as one string, and only when it changed since the last one.
+local function ContextToSend(room)
+	local ctx = db.settings.context and FlatContext() or ""
+	if ctx == (run.contextSent or "") then return nil end
+	if room and #ctx > room then return nil end
+	return ctx
 end
 
 function WoWClaude.SetWaypoint(point)
@@ -1091,16 +1361,6 @@ function WoWClaude.SetWaypoint(point)
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
 	end
 	if set then print("WoW Voice Guide waypoint: " .. (point.label or "destination")) end
-end
-
--- The context to put on the next record, or nil when the bridge already has
--- it (or it wouldn't fit next to this message; it goes with a later one).
--- "" when the setting is off, so the bridge drops what it had.
-local function ContextToSend(room)
-	local ctx = db.settings.context and WoWClaude.GameContext() or ""
-	if ctx == (run.contextSent or "") then return nil end
-	if room and #ctx > room then return nil end
-	return ctx
 end
 
 -- Read a link's tooltip off a hidden GameTooltip, one line per row.
@@ -1206,8 +1466,18 @@ function WoWClaude.Send(text, allow, voice)
 		WoWClaude.Render()
 		return
 	end
-	-- The game context rides along when the bridge doesn't have this version yet.
-	local ctx = ContextToSend(limit - #text)
+	-- Pixel mode: the question goes out right behind a record with whatever
+	-- game state changed (position included), so the bridge has it first.
+	-- Reload mode: the whole context rides in the outbox when it changed.
+	local ctx
+	if db.settings.mode == "pixel" then
+		if db.settings.context then
+			WoWClaude.MarkState({ "loc", "quest", "quests" }, 0)
+			WoWClaude.FlushState(true)
+		end
+	else
+		ctx = ContextToSend(limit - #text)
+	end
 
 	db.lastSeq = db.lastSeq + 1
 	local id = db.lastSeq
@@ -1297,8 +1567,8 @@ end
 -- Hello: a record with no text that just announces our session token. The bridge
 -- acks it, offers a restore if our saved data is fresh, and refreshes the slots,
 -- so the status light and any lost chats come back before the first message.
--- The game context always rides on it (empty when turned off), so the bridge's
--- copy is brought in line at every login and Connect.
+-- The full game state follows it (or a clear when context is off), so the
+-- bridge's copy is brought in line at every login and Connect.
 function WoWClaude.SayHello()
 	if db.settings.mode ~= "pixel" then return end
 	local now = GetTime()
@@ -1306,8 +1576,10 @@ function WoWClaude.SayHello()
 	run.lastHelloAt = now
 	db.lastSeq = db.lastSeq + 1
 	local c = ActiveChat()
-	local ctx = db.settings.context and WoWClaude.GameContext() or ""
-	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "h;vol=" .. db.settings.voiceVolume, name = c and c.name or "", text = "", ctx = ctx, sentAt = now, hello = true }
+	run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "h;vol=" .. db.settings.voiceVolume, name = c and c.name or "", text = "", sentAt = now, hello = true }
+	-- Then every game state section again (it goes out once the bridge answers),
+	-- or one record clearing them when context is off.
+	if db.settings.context then WoWClaude.SendFullState() else WoWClaude.ClearState() end
 	run.helloPollAt = now + 5
 	-- Deletions the bridge never confirmed ride along with the hello.
 	for id in pairs(db.forget) do SendForget(id) end
@@ -2686,6 +2958,8 @@ local HELP = table.concat({
 	"/wow-claude cd <folder>            compatibility work folder for this chat (normally leave it at default)",
 	"/wow-claude reset                  next message starts a fresh guide conversation",
 	"/wow-claude context [on|off]       what the guide is told about your character and location",
+	"/wow-claude announce <kind> on|off spoken announcements: quest, level, zone, bags, all (off by default)",
+	"/wow-claude narrate on|off         read newly accepted quests aloud in the guide voice",
 	"/wow-claude mode pixel             no-reload transport (default)",
 	"/wow-claude mode reload            fallback transport: a /reload per step",
 	"/wow-claude resend                 show the strip again if the bridge missed it",
@@ -2784,18 +3058,24 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 		rest = rest:lower()
 		if rest == "on" or rest == "off" then
 			s.context = rest == "on"
-			-- Make sure the next record carries the change, hello throttle or not.
+			-- Make sure the bridge hears about the change at once: every section
+			-- again when turned on, one record clearing them all when turned off.
 			run.contextSent = nil
-			run.lastHelloAt = nil
-			if WoWClaude.IsConnected() then WoWClaude.SayHello() end
+			if s.context then
+				WoWClaude.SendFullState()
+			else
+				WoWClaude.ClearState()
+			end
 		end
 		local ctx = WoWClaude.GameContext()
 		AddHistory(c, "system", (s.context
-			and "Game context is ON: the guide receives this with each changed situation. /wow-claude context off to stop.\n\n"
+			and "Game context is ON: the guide receives this, updated as things change (quests, dialogs, target, zone, gear). /wow-claude context off to stop.\n\n"
 			or "Game context is OFF: the guide receives no character or location data. /wow-claude context on to send this:\n\n") .. ctx
 			.. "\n\nTip: click the input box, then shift-click an item, spell or quest to attach its tooltip to your question.")
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)
+	elseif cmd == "announce" or cmd == "narrate" then
+		WoWClaude.AnnounceCommand(cmd, rest)
 	elseif cmd == "mode" then
 		if rest == "pixel" or rest == "reload" then
 			s.mode = rest
@@ -2930,7 +3210,11 @@ ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
 ev:RegisterEvent("CHAT_MSG_WHISPER")
 ev:RegisterEvent("CHAT_MSG_BN_WHISPER")
-ev:SetScript("OnEvent", function(self, event, arg1)
+-- Game state events. An event this client doesn't know makes RegisterEvent
+-- throw, so each one is registered on its own through Try.
+for _, name in ipairs(WoWClaude.StateEvents()) do Try(ev.RegisterEvent, ev, name) end
+ev:SetScript("OnEvent", function(self, event, arg1, ...)
+	if WoWClaude.OnStateEvent(event, arg1, ...) then return end
 	if event == "ADDON_LOADED" then
 		if arg1 == ADDON_NAME then
 			InitDB()
@@ -2942,6 +3226,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
 		if not db then InitDB() end
 		BuildUI()
 		run = { outbound = {} }
+		run.lastZone = Try(GetZoneText) -- the zone we log in to is not announced
 		SelfTestSignals()
 		ProcessInbox()
 		if AnyPending() then
@@ -2977,6 +3262,7 @@ ev:SetScript("OnEvent", function(self, event, arg1)
 		C_Timer.NewTicker(TICK_SECONDS, Tick)
 		C_Timer.After(3, WoWClaude.SayHello)
 	elseif event == "PLAYER_REGEN_ENABLED" then
+		WoWClaude.FlushAnnouncements()
 		if WoWClaude.reloadAfterCombat then
 			WoWClaude.reloadAfterCombat = nil
 			ReloadUI()

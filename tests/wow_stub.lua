@@ -10,6 +10,7 @@ STUB = {
 	now = 1000, epoch = 1700000000, sounds = {}, loaded = {}, reloaded = false,
 	tooltips = {}, zone = "Duskwood", subzone = "Darkshire", level = 23, money = 12345,
 	quests = {}, selectedQuest = 0, trackedQuest = 0, questObjectives = {},
+	readyQuests = {}, waypointText = {}, completed = { 1, 2, 3, 5, 783, 7, 8 },
 }
 
 local function noop() end
@@ -155,7 +156,8 @@ function hooksecurefunc(a, b, c)
 		_G[a] = function(...) local r = orig(...); b(...); return r end
 	end
 end
-function InCombatLockdown() return false end
+function InCombatLockdown() return STUB.combat or false end
+function UnitAffectingCombat(unit) return STUB.combat or false end
 function ReloadUI() STUB.reloaded = true end
 function GetTime() return STUB.now end
 function time() return STUB.epoch + math.floor(STUB.now) end
@@ -189,9 +191,16 @@ function ChatEdit_InsertLink(text) return ChatFrameUtil.InsertLink(text) end
 
 -- The character, for the game context (WoWClaude.GameContext).
 function GetBuildInfo() return "1.60.1", "69913", "Sep 1 2026", 16001 end
-function UnitName(unit) if unit == "player" then return "Testchar" end end
+function UnitName(unit)
+	if unit == "player" then return "Testchar" end
+	if unit == "target" and STUB.target then return STUB.target.name end
+	if unit == "npc" then return STUB.npcName end
+end
 function GetRealmName() return "Test Realm" end
-function UnitLevel(unit) return STUB.level end
+function UnitLevel(unit)
+	if unit == "target" then return STUB.target and STUB.target.level end
+	return STUB.level
+end
 function UnitRace(unit) return "Night Elf", "NightElf" end
 function UnitClass(unit) return "Hunter", "HUNTER" end
 function UnitFactionGroup(unit) return "Alliance", "Alliance" end
@@ -220,18 +229,62 @@ C_QuestLog = {
 		for _, quest in ipairs(STUB.quests) do if quest.questID == id then return quest.title end end
 	end,
 	GetQuestObjectives = function(id) return STUB.questObjectives[id] end,
+	ReadyForTurnIn = function(id) return STUB.readyQuests[id] or false end,
+	IsComplete = function(id) return STUB.readyQuests[id] or false end,
+	GetNextWaypointText = function(id) return STUB.waypointText[id] end,
+	GetAllCompletedQuestIDs = function() return STUB.completed end,
+	GetLogIndexForQuestID = function(id)
+		for i, quest in ipairs(STUB.quests) do if quest.questID == id then return i end end
+	end,
 }
+function GetQuestLogCompletionText(index)
+	local quest = STUB.quests[index] or {}
+	return quest.completion
+end
 function GetQuestLogQuestText(index)
 	local quest = STUB.quests[index] or {}
 	return quest.description, quest.instructions
 end
 function UnitXP(unit) return 1234 end
 function UnitXPMax(unit) return 5000 end
-function GetNumTalentTabs() return 3 end
-function GetTalentTabInfo(i)
-	local tabs = { { "Beast Mastery", 10 }, { "Marksmanship", 5 }, { "Survival", 0 } }
-	return tabs[i][1], "Interface\\Icons\\x", tabs[i][2]
-end
+function GetXPExhaustion() return STUB.rested end
+function IsResting() return STUB.resting end
+function GetBindLocation() return "Darkshire" end
+function IsInInstance() return false, "none" end
+-- The Forever client has the modern talent API only (no GetNumTalentTabs).
+C_SpecializationInfo = {
+	GetSpecialization = function() return 1 end,
+	GetSpecializationInfo = function(i) return 253, "Beast Mastery" end,
+}
+C_ClassTalents = { GetActiveConfigID = function() return 7 end }
+local TRAIT_NODES = {
+	[101] = { rank = 3, entry = 1001, def = 5001, spell = 19552, name = "Improved Aspect of the Hawk" },
+	[102] = { rank = 0, entry = 1002, def = 5002, spell = 19553, name = "Endurance Training" },
+	[103] = { rank = 1, entry = 1003, def = 5003, spell = 19554, name = "Bestial Swiftness" },
+}
+C_Traits = {
+	GetConfigInfo = function(id) return { ID = id, treeIDs = { 9 } } end,
+	GetTreeNodes = function(tree) return { 101, 102, 103 } end,
+	GetNodeInfo = function(config, node)
+		local n = TRAIT_NODES[node]
+		return { ID = node, ranksPurchased = n.rank, activeRank = n.rank, activeEntry = { entryID = n.entry } }
+	end,
+	GetEntryInfo = function(config, entry)
+		for _, n in pairs(TRAIT_NODES) do if n.entry == entry then return { definitionID = n.def } end end
+	end,
+	GetDefinitionInfo = function(def)
+		for _, n in pairs(TRAIT_NODES) do if n.def == def then return { spellID = n.spell } end end
+	end,
+}
+C_SpellBook = {
+	GetCurrentLevelSpells = function(level) return STUB.levelSpells and STUB.levelSpells[level] end,
+}
+C_Spell = {
+	GetSpellName = function(id)
+		for _, n in pairs(TRAIT_NODES) do if n.spell == id then return n.name end end
+		return STUB.spellNames and STUB.spellNames[id]
+	end,
+}
 TRADE_SKILLS, SECONDARY_SKILLS = "Professions", "Secondary Skills"
 local SKILLS = {
 	{ "Class Skills", true }, { "Bows", false, 46, 115 },
@@ -239,13 +292,50 @@ local SKILLS = {
 	{ "Secondary Skills", true }, { "First Aid", false, 40, 75 },
 	{ "Weapon Skills", true }, { "Swords", false, 10, 115 },
 }
-function GetNumSkillLines() return #SKILLS end
-function GetSkillLineInfo(i)
-	local s = SKILLS[i]
-	return s[1], s[2] or nil, false, s[3], 0, 0, s[4]
+-- Skill lines through C_SkillInfo (the globals are gone on Forever); answers with a table.
+C_SkillInfo = {
+	GetNumSkillLines = function() return #SKILLS end,
+	GetSkillLineInfo = function(i)
+		local s = SKILLS[i]
+		return { skillLineName = s[1], isHeader = s[2] or false, skillLineRank = s[3], skillLineMaxRank = s[4] }
+	end,
+}
+-- Target, NPC dialogs, flight map, gear: driven by fields on STUB.
+function UnitExists(unit) return unit == "target" and STUB.target ~= nil end
+function UnitClassification(unit) return STUB.target and STUB.target.classification end
+function UnitCreatureType(unit) return STUB.target and STUB.target.creatureType end
+function UnitReaction(unit, other) return STUB.target and STUB.target.reaction end
+function UnitIsPlayer(unit) return unit == "player" or (unit == "target" and STUB.target and STUB.target.player) or false end
+function UnitGUID(unit) return STUB.target and STUB.target.guid end
+function UnitHealth() STUB.healthRead = true; error("the add-on must never read health") end
+C_GossipInfo = {
+	GetText = function() return STUB.gossip and STUB.gossip.text end,
+	GetAvailableQuests = function() return STUB.gossip and STUB.gossip.available or {} end,
+	GetActiveQuests = function() return STUB.gossip and STUB.gossip.active or {} end,
+	GetOptions = function() return STUB.gossip and STUB.gossip.options or {} end,
+}
+function GetTitleText() return STUB.questDialog and STUB.questDialog.title end
+function GetQuestText() return STUB.questDialog and STUB.questDialog.text end
+function GetObjectiveText() return STUB.questDialog and STUB.questDialog.objective end
+function GetQuestID() return STUB.questDialog and STUB.questDialog.id or 0 end
+function GetTaxiMapID() return 1414 end
+C_TaxiMap = {
+	GetAllTaxiNodes = function(mapId) return STUB.taxiNodes or {} end,
+}
+Enum = { FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 } }
+function GetInventoryItemLink(unit, slot) return STUB.gear and STUB.gear[slot] and STUB.gear[slot].link end
+function GetInventoryItemDurability(slot)
+	local g = STUB.gear and STUB.gear[slot]
+	if g and g.max then return g.cur, g.max end
 end
+function GetAverageItemLevel() return STUB.avgIlvl end
+C_Container = {
+	GetContainerNumSlots = function(bag) return bag == 0 and 16 or (STUB.bagSlots or 0) end,
+	GetContainerNumFreeSlots = function(bag) return bag == 0 and (STUB.freeSlots or 10) or 0, 0 end,
+}
 ITEM_QUALITY2_DESC = "Uncommon"
 C_Item = {
+	GetDetailedItemLevelInfo = function(link) return STUB.ilvl and STUB.ilvl[link] end,
 	GetItemInfo = function(link)
 		if tostring(link):find("^item:2140") then return "Fine Longsword", link, 2, 19, 14, "Weapon", "One-Handed Swords" end
 	end,

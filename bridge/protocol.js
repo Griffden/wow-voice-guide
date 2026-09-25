@@ -87,15 +87,27 @@ function sameFolder(a, b) {
 // (no prompt), "d" = the player deleted this chat: forget its transcript and
 // session (no prompt), "allow=Rule1,Rule2" = add these permission rules before
 // running, "c" = the record carries a game-context field before the text (an
-// empty one clears the context the bridge keeps). "vol=125" sets companion
-// voice playback volume as a percentage (0..200).
+// empty one clears the context the bridge keeps), "s" = the record carries game
+// state sections in that field instead (see bridge/gamestate.js). "vol=125" sets
+// companion voice playback volume as a percentage (0..200). "a" = the text is
+// an announcement moment (quest ready, level up, ...; see bridge/announce.js),
+// "ann=quest:1,zone:0" = the player switched announcements in game.
 function parseFlags(flags) {
-  const out = { newSession: false, hello: false, forget: false, context: false, voice: false, voiceCancel: false, volume: null, allow: [] };
+  const out = { newSession: false, hello: false, forget: false, context: false, state: false, voice: false, voiceCancel: false, volume: null, allow: [] };
+  const announceSet = {};
   for (const tok of String(flags || '').split(';')) {
     if (tok === 'n') out.newSession = true;
     else if (tok === 'h') out.hello = true;
     else if (tok === 'd') out.forget = true;
     else if (tok === 'c') out.context = true;
+    else if (tok === 's') out.state = true;
+    else if (tok === 'a') out.announce = true;
+    else if (tok.startsWith('ann=')) {
+      for (const pair of tok.slice(4).split(',')) {
+        const [kind, on] = pair.split(':');
+        if (/^(quest|level|zone|bags|narrate)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
+      }
+    }
     else if (tok === 'v') out.voice = true;
     else if (tok === 'x') out.voiceCancel = true;
     else if (tok.startsWith('vol=')) {
@@ -104,23 +116,25 @@ function parseFlags(flags) {
     }
     else if (tok.startsWith('allow=')) out.allow.push(...tok.slice(6).split(',').map(s => s.trim()).filter(Boolean));
   }
+  if (Object.keys(announceSet).length) out.announceSet = announceSet;
   return out;
 }
 
 // Strip payload: records separated by \x1E, fields by \x1F:
-//   session, chat, id, cwd, flags, name, [ctx,] text
+//   session, chat, id, cwd, flags, name, [ctx | state,] text
 // `cwd` is left as typed; the bridge resolves it against its default folder.
-// The ctx field is only there when the flags say "c" (older addons never set
-// it), so a separator inside the text can't be mistaken for it.
+// The ctx field is only there when the flags say "c" or "s" (older addons never
+// set either), so a separator inside the text can't be mistaken for it.
 function jobsFromStrip(headerId, payload) {
   const jobs = [];
   for (const rec of String(payload).split('\x1E')) {
     const p = rec.split('\x1F');
     if (p.length >= 7 && /^\d+$/.test(p[2])) {
       const flags = parseFlags(p[4]);
-      const withCtx = flags.context && p.length >= 8;
+      const withCtx = (flags.context || flags.state) && p.length >= 8;
       const job = { session: p[0], chat: p[1], id: Number(p[2]), cwd: p[3], ...flags, name: p[5], text: p.slice(withCtx ? 7 : 6).join('\x1F'), via: 'pixel' };
-      if (withCtx) job.ctx = p[6];
+      if (withCtx && flags.state) job.state = p[6];
+      else if (withCtx) job.ctx = p[6];
       jobs.push(job);
     } else if (p.length === 6 && /^\d+$/.test(p[2])) { // previous format without the chat name
       jobs.push({ session: p[0], chat: p[1], id: Number(p[2]), cwd: p[3], ...parseFlags(p[4]), name: '', text: p[5], via: 'pixel' });
@@ -238,6 +252,9 @@ function luaTable(globalName, records, opts = {}) {
     `\tts = ${luaStr(new Date(now).toISOString())},`,
     `\tnow = ${Math.floor(now / 1000)},`,
     `\tcwd = ${luaStr(opts.cwd || '')},`,
+    // The companion's announcement switches, so the add-on stops sending
+    // moments nobody will speak.
+    ...(opts.announce ? [`\tannounce = { ${Object.entries(opts.announce).filter(([k, v]) => /^\w+$/.test(k) && typeof v === 'boolean').map(([k, v]) => `${k} = ${v}`).join(', ')} },`] : []),
     '\treplies = {',
   ];
   for (const r of records) {

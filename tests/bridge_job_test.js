@@ -19,6 +19,9 @@ test('researched answer logs lookup and completes without a reference error', as
     beat: () => {},
     publish: () => {},
     gameContext: () => 'Game: World of Warcraft: Forever',
+    state: { game: { sections: {} } },
+    answering: 0,
+    readQuestAnswer: () => null,
     cfg: { playerGuide: true, fish: { speakTyped: false } },
     Providers: {
       requestGuideAnswer: async (_cfg, input) => {
