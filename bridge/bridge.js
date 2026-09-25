@@ -427,6 +427,7 @@ function runJob(job) {
 
 async function runAssistantJob(job, text) {
   const key = chatKey(job);
+  const tag = `#${job.id}${job.session ? '@' + job.session : ''}`;
   const prior = (((transcripts.chats || {})[job.chat] || {}).messages || []).slice();
   job.text = String(text || '').trim();
   job.transcript = job.voice ? job.text : '';
