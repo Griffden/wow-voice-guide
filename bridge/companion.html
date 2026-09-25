@@ -72,6 +72,8 @@
             <label>TTS model<select id="fishModel"><option>s2.1-pro-free</option><option>s2.1-pro</option></select></label>
             <label>Latency<select id="fishLatency"><option>balanced</option><option>normal</option><option>low</option></select></label>
           </div>
+          <label class="check"><input id="fishStream" type="checkbox" checked> Stream speech: start talking on the first sentence</label>
+          <label class="check"><input id="fishFiller" type="checkbox" checked> Say a short filler line when a lookup takes a while</label>
         </fieldset>
         <button type="submit" class="primary">Save and restart bridge</button>
         <span id="saved"></span>

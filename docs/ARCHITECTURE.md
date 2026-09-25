@@ -10,7 +10,7 @@ Talk button -- pixel strip ------> capture.ps1 -> bridge worker
                                           +-> renderer microphone (16 kHz PCM)
                                           +-> Deepgram Flux /v2/listen
                                           +-> selected guide LLM <-> Wowhead Forever data, web search
-                                          +-> Fish Audio /v1/tts -> renderer playback
+                                          +-> Fish Audio streaming TTS -> renderer playback
                                           |
 answer <---- load-on-demand slot ----------+
 ```
@@ -146,7 +146,21 @@ Responses are cached in memory for six hours (at most 500 entries) and each requ
 
 ## Fish Audio
 
-The worker posts `speech` to Fish `/v1/tts` with the configured voice `reference_id`, requests a mono WAV, and sends the resulting local file path to the parent. Electron reads and deletes the temporary file, sends base64 audio to the renderer, and plays it. A Fish failure never discards the text answer.
+Spoken answers stream by default (`bridge/speech.js`):
+
+```text
+guide model (Responses API, stream: true)
+  -> response.output_text.delta events -> "speech" field of the JSON answer, as it arrives
+  -> sentence splitter -> Fish wss://api.fish.audio/v1/tts/live (MessagePack: start, text + flush per sentence, stop)
+  -> audio events (16-bit PCM, 44.1 kHz) -> bridge -> desktop main -> renderer
+  -> Web Audio buffers scheduled back to back -> gain -> limiter -> speakers
+```
+
+The answer schema puts `basis` before `speech`, so the Classic/general label is spoken first. A round whose output adds a function call or web search speaks nothing and tells the speaker a lookup started; if no answer speech follows within `fish.fillerDelayMs`, a short filler line ("Let me check that.") goes out on the same Fish stream. The text answer goes to the game as soon as the model finishes; audio that is still playing finishes on its own. Gemini and local presets are not streamed, but their answer still goes to Fish sentence by sentence.
+
+If the socket fails before any audio arrived, the worker falls back to the one-shot path: it posts the text to Fish `/v1/tts`, requests a mono WAV, and sends the file path to the parent, which reads and deletes it and plays it in the renderer. `fish.stream: false` always uses that path. A Fish failure never discards the text answer.
+
+Deepgram Flux's `EagerEndOfTurn`/`TurnResumed` events (starting the model speculatively before the turn is final) are not used yet.
 
 ## Inbound game protocol
 

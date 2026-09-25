@@ -27,6 +27,7 @@ const { spawn } = require('child_process');
 const P = require('./protocol'); // the pure protocol code, unit-tested in tests/bridge_test.js
 const Providers = require('./providers');
 const GameState = require('./gamestate');
+const Speech = require('./speech');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -458,6 +459,24 @@ function runJob(job) {
   runAssistantJob(job, job.text);
 }
 
+// The one-shot path: Fish POST /v1/tts -> a WAV file the desktop process
+// reads, deletes and plays. Used when streaming is off or its socket failed.
+async function speakFile(tag, text) {
+  const audio = await Providers.requestFishSpeech(cfg, text);
+  fs.mkdirSync(AUDIO_DIR, { recursive: true });
+  const file = path.join(AUDIO_DIR, `reply-${process.pid}-${tag}-${Date.now()}.wav`);
+  fs.writeFileSync(file, audio);
+  if (process.send) process.send({ type: 'audio:play', file });
+}
+
+function createSpeaker(job, label = String(job.id)) {
+  return new Speech.Speaker(cfg, {
+    send: message => { if (process.send) process.send(message); },
+    log: line => log(`#${label} ${line}`),
+    fallback: text => speakFile(label, text),
+  });
+}
+
 async function runAssistantJob(job, text) {
   const key = chatKey(job);
   const tag = `#${job.id}${job.session ? '@' + job.session : ''}`;
@@ -474,28 +493,34 @@ async function runAssistantJob(job, text) {
   if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
   try {
     const onProgress = text => { if (process.send) process.send({ type: 'status', status: { state: 'thinking', text } }); };
+    // Spoken answers stream: the speaker starts Fish on the first sentence the
+    // model writes, and says a filler line if a lookup keeps it waiting.
+    const speaker = job.voice || (cfg.fish && cfg.fish.speakTyped) ? createSpeaker(job) : null;
     const input = { context: gameContext(job.text), game: cfg.gameContext === false ? null : state.game, history: prior, text: job.text, onProgress };
-    const answer = await Providers.requestGuideAnswer(cfg, input);
+    if (speaker && speaker.streaming) {
+      input.onSpeech = delta => speaker.push(delta);
+      input.onLookup = () => speaker.lookupStarted();
+    }
+    let answer;
+    try { answer = await Providers.requestGuideAnswer(cfg, input); }
+    catch (e) { if (speaker) speaker.cancel(); throw e; }
     if (answer.lookup) log(`${tag} guide: basis=${answer.lookup.basis}, questNotes=${answer.lookup.questNotes}, toolCalls=${answer.lookup.toolCalls}, webSearches=${answer.lookup.webSearches}, citations=${answer.lookup.citations}`);
     if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources });
-    let speechError = '';
-    let audioStarted = false;
-    if (job.voice || (cfg.fish && cfg.fish.speakTyped)) {
-      publish(key, { chat: job.chat, id: job.id, status: 'working', text: 'speaking...', transcript: job.transcript, cwd: job.cwd }, true);
-      try {
-        const audio = await Providers.requestFishSpeech(cfg, answer.speech);
-        fs.mkdirSync(AUDIO_DIR, { recursive: true });
-        const file = path.join(AUDIO_DIR, `reply-${process.pid}-${job.id}.wav`);
-        fs.writeFileSync(file, audio);
-        if (process.send) { process.send({ type: 'audio:play', file }); audioStarted = true; }
-      } catch (e) {
-        speechError = e.message;
-        log(`#${job.id} Fish speech failed: ${speechError}`);
-        if (process.send) process.send({ type: 'status', status: { state: 'error', text: `Text answer ready; Fish voice failed: ${speechError}` } });
-      }
+    // The text goes to the game at once; speech that is still playing finishes on its own.
+    const speech = speaker ? speaker.finish(answer.streamed ? '' : answer.speech) : null;
+    finish(job, 'done', answer.display, '', [], { transcript: job.transcript, waypoint: answer.waypoint });
+    if (!speech) {
+      if (process.send) process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
+      return;
     }
-    finish(job, 'done', answer.display, '', [], { transcript: job.transcript, waypoint: answer.waypoint, speechError });
-    if (!audioStarted && !speechError && process.send) process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
+    try {
+      const result = await speech;
+      log(`${tag} speech: ${result.mode}${result.firstAudioMs != null ? `, first audio ${result.firstAudioMs} ms after the question` : ''}${result.error ? ` (${result.error})` : ''}`);
+      if (result.mode === 'none' && process.send) process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
+    } catch (e) {
+      log(`${tag} Fish speech failed: ${e.message}`);
+      if (process.send) process.send({ type: 'status', status: { state: 'error', text: `Text answer ready; Fish voice failed: ${Providers.redact(e.message)}` } });
+    }
   } catch (e) {
     finish(job, 'error', Providers.redact(e.message || String(e)), '', [], { transcript: job.transcript });
     if (process.send) process.send({ type: 'status', status: { state: 'error', text: Providers.redact(e.message || String(e)) } });

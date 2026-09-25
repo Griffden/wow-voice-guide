@@ -63,6 +63,7 @@ Wowhead has no official API. The companion uses the JSON endpoints behind Wowhea
 | `playerGuide.model` | `gpt-6-luna` | Responses API model for the tool-using guide |
 | `playerGuide.reasoningEffort` | model default | Optional Responses API reasoning effort |
 | `playerGuide.maxRounds` | `4` | Model calls per question; the last one cannot call tools, so an answer always arrives |
+| `playerGuide.stream` | `true` | Stream the Responses API reply so spoken answers start on the first sentence (only when the answer is spoken and `fish.stream` is on) |
 | `playerGuide.timeoutMs` | `60000` | Deadline for the whole answer, including lookups |
 
 The add-on sends every quest in your log with its objective progress and turn-in state, and the full text, next step and turn-in text for the selected or tracked quest. It does not read the rendered screen. If several quests are open and none is selected or tracked, name or shift-click the quest when asking which one you mean.
@@ -81,11 +82,19 @@ Set `provider` to `gemini` and choose `gemma-4-26b-a4b-it` or `gemma-4-31b-it`. 
 | `fish.speed` | `1` | Voice speed |
 | `fish.volume` | `0` | Gain adjustment |
 | `fish.speakTyped` | `false` | Also synthesize typed questions' answers |
+| `fish.stream` | `true` | Stream speech over Fish's WebSocket (`wss://api.fish.audio/v1/tts/live`): synthesis starts on the first sentence and PCM chunks play as they arrive. `false` uses the one-shot `POST /v1/tts` WAV after the whole answer. Companion Settings: **Stream speech** |
+| `fish.filler` | `true` | While a lookup (Wowhead, web search, quest database tool) keeps the answer waiting, say a short filler line. Companion Settings: **Say a short filler line** |
+| `fish.fillerDelayMs` | `1200` | How long a lookup must run, with no answer speech yet, before the filler is said |
+| `fish.fillers` | built in | Filler lines to pick from, e.g. `["Let me check that."]` |
 | `fish.timeoutMs` | `60000` | Synthesis timeout |
 
 The companion's built-in voice choices are Peon (`06c4b6c98f8a451cad28734427faaa9d`), Furbolg (`fa4d72bfeee64c029970e09aeb67c43e`), Knight (`b31185cef9d54e908c58dfe901e9598b`), and Asmongold (`fb029f2d4c6c4405bd5b476b536519ae`). Choosing one fills the same editable `fish.voiceId` field; an existing custom ID stays intact and appears as **Custom model ID**. Peon remains the fresh-install default. Fish's model API reported the three new models as public and trained, but `licensed: false` at the time of addition. Public visibility does not establish permission to publish generated audio or imply an endorsement.
 
-Output is 44.1 kHz mono WAV. Check the model page and Fish account terms before distribution.
+Streamed output is 44.1 kHz mono 16-bit PCM; the one-shot path returns 44.1 kHz mono WAV. If the stream fails before any audio played, the answer is synthesized through the one-shot path instead, so a socket problem costs time but not the reply. Check the model page and Fish account terms before distribution.
+
+### Latency
+
+With the OpenAI preset and both streaming options on (defaults), the guide model's answer is streamed too (`playerGuide.stream`): the answer's JSON puts `basis` first, its spoken label (if any) and the first sentence of `speech` go to Fish while the model is still writing, and the text answer reaches the game when the model finishes. Gemini and local presets are not streamed, but their answer still reaches Fish sentence by sentence. The bridge log records `first audio N ms after the question` for every spoken answer.
 
 ### Playback volume
 

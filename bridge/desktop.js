@@ -14,6 +14,7 @@ let win = null;
 let bridge = null;
 let flux = null;
 let cfg = {};
+let speakingStream = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 // Voice capture is initiated by the in-game hotkey, not a click inside this
@@ -196,6 +197,20 @@ function onBridgeMessage(message) {
       });
       ui('status', { state: 'speaking', text: 'Speaking…' });
     } catch (e) { log(`audio playback file failed: ${e.message}`); }
+  } else if (message.type === 'audio:chunk') {
+    // Streamed speech: PCM chunks straight to the renderer's Web Audio queue.
+    if (message.streamId !== speakingStream) {
+      speakingStream = message.streamId;
+      ui('status', { state: 'speaking', text: 'Speaking…' });
+    }
+    ui('audio:stream', {
+      streamId: message.streamId,
+      sampleRate: message.sampleRate,
+      base64: message.base64,
+      volumePercent: ((cfg.audio || {}).volumePercent ?? 125),
+    });
+  } else if (message.type === 'audio:end') {
+    ui('audio:stream-end', { streamId: message.streamId, cancelled: !!message.cancelled });
   } else if (message.type === 'status') ui('status', message.status);
   else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources });
 }
