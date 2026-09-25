@@ -22,7 +22,8 @@ test('buildMessages supplies game context, bounded history and the current quest
   assert.equal(messages[1].content, 'm8');
   assert.deepEqual(messages.at(-1), { role: 'user', content: 'Where now?' });
   assert.match(messages[0].content, /World of Warcraft: Forever/);
-  assert.match(messages[0].content, /Do not silently substitute facts from Retail, Classic/);
+  assert.match(messages[0].content, /matching Classic-era zone or quest guide/);
+  assert.match(messages[0].content, /label it as Classic-based/);
   assert.match(messages[0].content, /earlier assistant replies as potentially mistaken/);
 });
 
@@ -105,7 +106,8 @@ test('quest lookup routes only research questions and returns cited guidance', a
     assert.deepEqual(request.body.tools, [{ type: 'web_search', external_web_access: true }]);
     assert.equal(request.body.tool_choice, 'required');
     assert.match(request.body.instructions, /World of Warcraft: Forever/);
-    assert.match(request.body.instructions, /do not recycle those steps/);
+    assert.match(request.body.instructions, /clearly labeled provisional reference/);
+    assert.match(request.body.instructions, /WAYPOINT: zone/);
     assert.match(request.body.input, /I am doing the Forever Dalaran quest/);
     assert.doesNotMatch(request.body.input, /A previous mistaken NPC location/);
     assert.equal(answer.speech, 'Board the ship near the dock.');
@@ -156,6 +158,138 @@ test('mentioning Classic or Forever keeps the current Forever edition', async ()
     });
     assert.equal(answer.lookup.edition, 'forever');
     assert.match(answer.speech, /Rut'theran Village/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('shared Classic geography can guide Forever travel and produce a sourced waypoint', async () => {
+  const originalFetch = global.fetch;
+  let request;
+  const url = 'https://www.wowhead.com/classic/zone=33/stranglethorn-vale';
+  global.fetch = async (_url, init) => {
+    request = JSON.parse(init.body);
+    return new Response(JSON.stringify({ output: [
+      { type: 'web_search_call' },
+      { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
+        speech: 'Booty Bay is at the southern tip of Stranglethorn Vale, around 27, 77.',
+        waypoint: { zone: 'Stranglethorn Vale', x: 27, y: 77, label: 'Booty Bay', sourceUrl: url },
+      }), annotations: [{ type: 'url_citation', title: 'Booty Bay in WoW Classic', url }] }] },
+    ] }), { status: 200 });
+  };
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever\nLocation: Stormwind City - Harbor\nPosition: 40.0, 50.0 (map 1453)\nSelected quest: Exploring the Alliance (id 39963)\nObjective: Visit the Keep',
+      text: 'How do I get to Booty Bay?',
+    });
+    assert.doesNotMatch(request.input, /Exploring the Alliance|Visit the Keep/);
+    assert.match(request.instructions, /Classic Era/);
+    assert.match(answer.speech, /^Using Classic-era geography as a reference/);
+    assert.deepEqual(answer.waypoint, { mapId: 1434, x: 0.27, y: 0.77, label: 'Booty Bay (Classic reference)' });
+    assert.equal(answer.sources[0].url, url);
+    assert.equal(answer.lookup.geography, true);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('matching Classic quest instructions are offered as a provisional Forever reference', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'The sample is near the lake.', annotations: [
+      { type: 'url_citation', title: 'Mirror Lake Quest - WoW Classic', url: 'https://www.wowhead.com/classic/quest=1861/mirror-lake' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'How do I complete the Mirror Lake quest?',
+    });
+    assert.equal(answer.lookup.geography, false);
+    assert.equal(answer.sources.length, 1);
+    assert.match(answer.speech, /^Using a matching Classic quest guide as a reference/);
+    assert.match(answer.speech, /sample is near/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('a Classic database page with the same tracked quest ID is accepted', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'Use the flask at the lake waterfall.', annotations: [
+      { type: 'url_citation', title: 'Mirror Lake', url: 'https://classicdb.ch/?quest=1861' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Selected quest: Mirror Lake (id 1861)\nObjective: Obtain Mirror Lake Water Sample',
+      text: 'How do I complete this quest?',
+    });
+    assert.match(answer.speech, /^Using a matching Classic quest guide as a reference/);
+    assert.match(answer.speech, /flask at the lake waterfall/);
+    assert.equal(answer.sources.length, 1);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('plain text answer with a cited waypoint line creates a waypoint but does not speak the metadata', async () => {
+  const originalFetch = global.fetch;
+  const url = 'https://www.wowhead.com/classic/zone=33/stranglethorn-vale';
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text',
+      text: `Booty Bay lies in southern Stranglethorn Vale.\nWAYPOINT: Stranglethorn Vale | 27.5 | 77.7 | Booty Bay | ${url}`,
+      annotations: [{ type: 'url_citation', title: 'Booty Bay in Classic', url }],
+    }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Location: Stormwind City - Harbor', text: 'How do I get to Booty Bay?',
+    });
+    assert.deepEqual(answer.waypoint, { mapId: 1434, x: 0.275, y: 0.777, label: 'Booty Bay (Classic reference)' });
+    assert.doesNotMatch(answer.speech, /WAYPOINT:/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('an unrelated Classic quest is not used as a fallback', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: 'Collect the goblin parts.', annotations: [
+      { type: 'url_citation', title: 'A Different Quest - WoW Classic', url: 'https://www.wowhead.com/classic/quest=123/a-different-quest' },
+    ] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'How do I complete the Mirror Lake quest?',
+    });
+    assert.equal(answer.sources.length, 0);
+    assert.doesNotMatch(answer.speech, /goblin parts/);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('a travel request without a destination asks for one without searching or using the quest', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => { throw new Error('should not search'); };
+  try {
+    const answer = await Providers.requestPlayerGuide({}, {
+      context: 'Location: Stormwind City - Harbor\nSelected quest: Exploring the Alliance (id 39963)',
+      text: 'How do I get from Booty Bay where I am?',
+    });
+    assert.match(answer.speech, /Where do you want to go/);
+    assert.equal(answer.quest, null);
+  } finally { global.fetch = originalFetch; }
+});
+
+test('a researched waypoint without a cited coordinate source is rejected', async () => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => new Response(JSON.stringify({ output: [
+    { type: 'web_search_call' },
+    { type: 'message', content: [{ type: 'output_text', text: JSON.stringify({
+      speech: 'Booty Bay is south in Stranglethorn Vale.',
+      waypoint: { zone: 'Stranglethorn Vale', x: 27, y: 77, label: 'Booty Bay', sourceUrl: 'https://unrelated.example/coordinates' },
+    }), annotations: [{ type: 'url_citation', title: 'Booty Bay - WoW Forever', url: 'https://example.com/forever/booty-bay' }] }] },
+  ] }), { status: 200 });
+  try {
+    const answer = await Providers.requestPlayerGuide({ llm: { endpoint: 'https://api.openai.com/v1/chat/completions', apiKey: 'test-key' } }, {
+      context: 'Game: World of Warcraft: Forever', text: 'How do I get to Booty Bay?',
+    });
+    assert.equal(answer.waypoint, null);
   } finally { global.fetch = originalFetch; }
 });
 
