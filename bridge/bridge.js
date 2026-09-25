@@ -26,6 +26,7 @@ const readline = require('readline');
 const { spawn } = require('child_process');
 const P = require('./protocol'); // the pure protocol code, unit-tested in tests/bridge_test.js
 const Providers = require('./providers');
+const GameState = require('./gamestate');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -85,6 +86,13 @@ const voiceRequests = new Map();
 let state = readJson(STATE_FILE, { lastId: 0, sessions: {}, handled: {} });
 if (!state.handled) state.handled = {};
 if (!state.sessions) state.sessions = {};
+// The merged game state sections (bridge/gamestate.js). A context string kept by
+// an older bridge becomes the one legacy section.
+if (!state.game || !state.game.sections) state.game = GameState.newStore();
+if (state.context) {
+  if (state.context.text && !Object.keys(state.game.sections).length) GameState.setLegacyContext(state.game, state.context.text, { now: state.context.at || Date.now() });
+  delete state.context;
+}
 // Older versions stored handled[session] as "highest id so far"; expand to a map.
 for (const [k, v] of Object.entries(state.handled)) {
   if (typeof v === 'number') {
@@ -251,6 +259,15 @@ function signal(kind, id, on) {
   try { atomicWrite(file, on ? SILENT_WAV : Buffer.alloc(0)); } catch {}
 }
 
+// Acknowledge a record. Ack files are reused every SLOTS ids and game state
+// records use ids too, so the next few are emptied here: a stale valid file
+// would make the add-on take a later record off the strip before we read it.
+const ACK_AHEAD = 20;
+function ack(id) {
+  signal('ack', id, true);
+  for (let k = 1; k <= ACK_AHEAD; k++) signal('ack', id + k, false);
+}
+
 // Heartbeat: act/NNN/kk.wav flips valid for the k-th action of message NNN. The
 // game polls the next one for free, so it can show "12 actions, last one 5 s ago"
 // without spending a reply slot.
@@ -298,23 +315,32 @@ function readOutbox() {
   return P.parseOutbox(src);
 }
 
-// The addon sends the player's in-game context (character, location, ...) with
-// its hello and again whenever it changes; an empty one means "context off".
-// It is kept in state.json so a restarted bridge still has it, and goes into
-// Claude's system prompt on every run (see protocol.systemPrompt).
-function setContext(job) {
+// The addon pushes the player's game state as named sections whenever they
+// change (flag "s"); an older addon or the reload path sends one context
+// string instead (flag "c"). The merged copy lives in state.json so a
+// restarted bridge still has it, and every question gets a context assembled
+// from it (bridge/gamestate.js). An empty context or "*" clears it.
+function applyGameState(job) {
+  const opts = { session: job.session || '' };
+  const tag = `#${job.id}${job.session ? '@' + job.session : ''}`;
+  if (job.state !== undefined) {
+    const changed = GameState.applySections(state.game, job.state, opts);
+    if (!changed.length) return;
+    saveState();
+    log(`${tag} game state: ${changed.join(', ')}${Object.keys(state.game.sections).length ? '' : ' (cleared)'}`);
+    return;
+  }
   const text = String(job.ctx || '').replace(/\r/g, '').trim().slice(0, 2000);
-  const prev = (state.context && state.context.text) || '';
-  if (text === prev) return;
-  state.context = text ? { text, at: Date.now(), session: job.session || '' } : null;
+  const prev = (state.game.sections.legacy || {}).text || '';
+  if (text === prev && Object.keys(state.game.sections).length === (text ? 1 : 0)) return;
+  GameState.setLegacyContext(state.game, text, opts);
   saveState();
-  const who = (text.split('\n').find(l => /^Character:/i.test(l)) || text.split('\n')[0] || '').slice(0, 100);
-  log(`#${job.id}${job.session ? '@' + job.session : ''} game context ${text ? 'updated: ' + who : 'cleared'}`);
+  log(`${tag} game context ${text ? 'updated: ' + GameState.summary(state.game) : 'cleared'}`);
 }
 
-function gameContext() {
+function gameContext(question) {
   if (cfg.gameContext === false) return '';
-  return (state.context && state.context.text) || '';
+  return GameState.assembleContext(state.game, question, { maxChars: cfg.gameContextMaxChars || 3500 });
 }
 
 // ---------------------------------------------------------------------------
@@ -323,7 +349,7 @@ function gameContext() {
 
 function submit(job) {
   if (alreadyHandled(job)) return;
-  if (job.ctx !== undefined) setContext(job);
+  if (job.ctx !== undefined || job.state !== undefined) applyGameState(job);
   if (job.volume !== null && job.volume !== undefined) {
     const volumePercent = Math.max(0, Math.min(200, Math.round(Number(job.volume) || 0)));
     if (process.send) process.send({ type: 'voice:volume', volumePercent });
@@ -331,14 +357,21 @@ function submit(job) {
     if (!job.hello && !job.forget && !job.voice && !job.voiceCancel && !String(job.text || '').trim()) {
       markHandled(job);
       saveState();
-      signal('ack', job.id, true);
+      ack(job.id);
       return;
     }
+  }
+  if (job.state !== undefined && !job.hello && !job.forget && !job.voice && !job.voiceCancel && !String(job.text || '').trim()) {
+    // Game state only: applied above, nothing to run.
+    markHandled(job);
+    saveState();
+    ack(job.id);
+    return;
   }
   if (job.voiceCancel) {
     markHandled(job);
     saveState();
-    signal('ack', job.id, true);
+    ack(job.id);
     if (process.send) process.send({ type: 'voice:cancel', chat: job.chat, targetId: Number(job.text) || 0 });
     return;
   }
@@ -347,7 +380,7 @@ function submit(job) {
     markHandled(job);
     forgetChat(job);
     saveState();
-    signal('ack', job.id, true);
+    ack(job.id);
     return;
   }
   if (job.hello) {
@@ -355,7 +388,7 @@ function submit(job) {
     // and refresh the slots so it can read our clock. No Claude run.
     markHandled(job);
     saveState();
-    signal('ack', job.id, true);
+    ack(job.id);
     maybeOfferRestore(job);
     publishNow();
     log(`hello from session ${job.session}${pendingRestore ? ' (restore offered)' : ''}`);
@@ -390,7 +423,7 @@ function prepareJob(job) {
   const tag = `#${job.id}${job.session ? '@' + job.session : ''}`;
   signal('sig', job.id, false);
   resetBeats(job.id);
-  signal('ack', job.id, true);
+  ack(job.id);
   if (!fs.existsSync(cwd)) {
     log(`${tag} cwd does not exist: ${cwd}`);
     const sibs = siblingFolders();
@@ -441,7 +474,7 @@ async function runAssistantJob(job, text) {
   if (process.send) process.send({ type: 'status', status: { state: 'thinking', text: `Thinking about: ${job.text}` } });
   try {
     const onProgress = text => { if (process.send) process.send({ type: 'status', status: { state: 'thinking', text } }); };
-    const input = { context: gameContext(), history: prior, text: job.text, onProgress };
+    const input = { context: gameContext(job.text), game: cfg.gameContext === false ? null : state.game, history: prior, text: job.text, onProgress };
     const answer = await Providers.requestGuideAnswer(cfg, input);
     if (answer.lookup) log(`${tag} guide: basis=${answer.lookup.basis}, questNotes=${answer.lookup.questNotes}, toolCalls=${answer.lookup.toolCalls}, webSearches=${answer.lookup.webSearches}, citations=${answer.lookup.citations}`);
     if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources });
@@ -544,8 +577,9 @@ function banner() {
   console.log(`  fallback : ${cfg.savedVariablesFile}`);
   console.log(`  brain    : ${((cfg.llm || {}).provider || 'openai-compatible')} / ${((cfg.llm || {}).model || 'NOT CONFIGURED')}`);
   console.log(`  speech   : Fish Audio / ${((cfg.fish || {}).model || 's2.1-pro-free')} / ${((cfg.fish || {}).voiceId ? 'voice selected' : 'NO VOICE ID')}`);
-  const ctx = gameContext();
-  console.log(`  context  : ${cfg.gameContext === false ? 'off (gameContext in config.json)' : ctx ? (ctx.split('\n').find(l => /^Character:/i.test(l)) || ctx.split('\n')[0]).slice(0, 100) : 'none yet (the addon sends it with its hello; /wow-claude context in game)'}`);
+  const who = GameState.summary(state.game);
+  const count = Object.keys(state.game.sections).length;
+  console.log(`  context  : ${cfg.gameContext === false ? 'off (gameContext in config.json)' : who ? `${who} (${count} sections)` : 'none yet (the addon sends it after its hello; /wow-claude context in game)'}`);
   console.log('Leave this window open while you play. Ctrl+C to stop.\n');
 }
 

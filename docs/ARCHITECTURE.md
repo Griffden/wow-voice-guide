@@ -32,16 +32,42 @@ session, chat, id, cwd, flags, name, [context,] text
 Relevant flags:
 
 - `h`: hello/connection handshake
-- `c`: a game-context field is present
+- `s`: a game state field is present (see below)
+- `c`: a single game-context string is present (older add-ons and the reload-mode outbox)
 - `d`: forget the chat
 - `v`: start a voice turn
 - `x`: cancel a voice turn (reserved by the worker protocol)
+
+### Game state sections
+
+The companion can never ask the game anything mid-answer: replies travel back through load-on-demand slots, which are slow. The add-on therefore pushes what the guide may need, as named text sections, whenever the game events behind them fire (`addon/WoWClaude/GameState.lua` builds them, `WoWClaude.lua` marks them dirty and sends them):
+
+| Section | Holds | Refreshed on |
+|---|---|---|
+| `char` | game and client, character, hearthstone | login, `PLAYER_LEVEL_UP`, `HEARTHSTONE_BOUND` |
+| `prog` | money, XP, rested XP | XP, money and resting events (30 s debounce) |
+| `loc` | zone, subzone, map position | zone changes; moving 3 map units; every question |
+| `quest` | selected/tracked quest: status (`ReadyForTurnIn`), objectives, `GetNextWaypointText`, instructions, turn-in text, description | quest log and tracking events |
+| `quests` | every quest in the log with objective progress or "ready to turn in" | `QUEST_LOG_UPDATE` (4 s debounce), accept, remove, turn-in |
+| `npc` | NPC name, what they say, quests offered/active with IDs, dialog options | `GOSSIP_SHOW`, `QUEST_GREETING`, `QUEST_DETAIL`, `QUEST_PROGRESS`, `QUEST_COMPLETE` |
+| `target` | name, level, classification, creature type, reaction, NPC id (never health) | `PLAYER_TARGET_CHANGED` |
+| `talents` | specialization and spent talents per sub-tree (`C_ClassTalents`, `C_Traits`) | `TRAIT_CONFIG_UPDATED`, `PLAYER_TALENT_UPDATE` |
+| `prof` | professions (`GetProfessions`, else `C_SkillInfo`) | `SKILL_LINES_CHANGED` |
+| `taxi` | known flight paths, cached per continent | `TAXIMAP_OPENED` |
+| `gear` | equipped items and item levels, low durability, free bag slots | equipment, durability and bag events |
+| `done.N`, `done.new` | completed quest IDs (`GetAllCompletedQuestIDs`), then turn-ins since | once per session, `QUEST_TURNED_IN` |
+
+A section record has flags `s` and its context field holds `key GS value` pairs joined by `FS` (ASCII 0x1D / 0x1C). An empty value deletes a section; the key `*` clears them all (context off, or the start of the full resend that follows every hello). Only sections whose text changed are sent, each record stays under 1.5 KB, and a question is always preceded by a record with the current position. Completed quest IDs are sent as sorted runs in base 36 with deltas (`a~3,11` = 10–13 and 50), chunked so each chunk decodes on its own; a few hundred completed quests take well under 1 KB.
+
+Section records carry no text and never escalate to the reload fallback. They leave the strip once acknowledged, or after three seconds on screen when the sound-file channel is unavailable (the bridge reads the strip four times a second). Nothing is sent while the bridge is away; the next hello sends everything.
+
+`bridge/gamestate.js` merges the sections into `state.json`. For each question it assembles the model's context from them within `gameContextMaxChars` (default 3,500): every section that fits, rendered in a fixed order, with the ones the question is about winning the budget (talents for a talent question, gear for "do I need to repair?", the NPC dialog for "what is he asking?"). A dialog older than 30 minutes is left out. Completed quest IDs are not sent to the model; the guide's quest tools use them.
 
 For a voice turn, the worker acknowledges the request and asks the Electron main process to start Flux. The renderer starts its microphone only after the WebSocket opens. About 85 ms of browser audio at a time is converted to mono signed 16-bit 16 kHz PCM. `EndOfTurn` supplies the final transcript; `ForceEndTurn` supports the manual finish button.
 
 ## Brain and response contract
 
-The worker combines the current transcript with recent local chat messages and the most recently acknowledged game context, then calls `Providers.requestGuideAnswer` for every question:
+The worker combines the current transcript with recent local chat messages and the game context assembled from the latest game state sections, then calls `Providers.requestGuideAnswer` for every question:
 
 ```text
 question + game context (character, zone, position, quest log with quest IDs)

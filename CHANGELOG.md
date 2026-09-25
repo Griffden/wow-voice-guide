@@ -14,13 +14,19 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - WoW: Forever game data from Wowhead's tooltip and search endpoints (`bridge/wowdata.js`), with Forever zone-to-map ids generated from client data (`bridge/zones.json`).
 - Quests in your log that a question mentions are looked up automatically before the model answers, for every brain preset.
 - The OpenAI player guide is a tool-using model with `wowhead_search`, `wowhead_lookup`, and web search, and shows its lookups in the companion status line. NPC coordinates from a lookup can become a waypoint.
+- Event-driven game state: the add-on pushes named sections (character, progress, location, focused quest, quest log, NPC dialog, target, talents, professions, flight paths, gear, completed quests) when the game events behind them fire, and the companion keeps a merged copy. New in what the guide knows: the full text, next step (`GetNextWaypointText`) and turn-in state of the focused quest, objective progress and "ready to turn in" for every quest in the log, completed quest IDs, the NPC dialog you last opened (text, offered and active quests with IDs), your target (never its health), known flight paths, hearthstone, rested XP, equipped gear with item levels, low durability and bag space.
+- Each question's game context is assembled from those sections within `gameContextMaxChars`, keeping first what the question is about.
 
 ### Fixed
+
+- Talents and professions were never sent on WoW: Forever: the add-on called the Classic `GetNumTalentTabs` and `GetSkillLineInfo` globals, which the Forever client does not have. It now reads `C_ClassTalents`/`C_Traits` and `GetProfessions`/`C_SkillInfo`.
+- Acknowledgement signal files are emptied a few ids ahead as records are acknowledged, so a file left valid from an earlier use can no longer take a later record off the strip before the bridge has read it.
 
 - The guide window can no longer be resized past the screen, where its resize grip became unreachable. A saved size that no longer fits is shrunk on load, and `/wow-claude size reset` or right-clicking the resize grip restores the default size, centered.
 
 ### Changed
 
+- Protocol: game context now travels in section records (flag `s`) that follow the hello and each change, instead of one 1.5 KB string on the hello and on messages (flag `c`). The companion still accepts `c` from older add-ons and from the reload-mode outbox, as a single legacy section.
 - The guide labels answers by what they rest on (Forever data, Classic information, or general knowledge) instead of refusing with "I couldn't verify". The keyword router that decided when to search and the URL filter that discarded unverified sources were removed.
 - Player-facing branding is WoW Voice Guide. Internal `WoWClaude` identifiers remain for upstream transport and SavedVariables compatibility.
 - Claude Code execution and tool-permission handling were replaced by the voice-guide provider pipeline.

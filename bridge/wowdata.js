@@ -119,7 +119,8 @@ function questLog(context) {
   const line = String(context || '').match(/^Quest log \(\d+\): (.+)$/m);
   if (line) {
     for (const entry of line[1].split('; ')) {
-      const match = entry.match(/^(.+) \(#(\d+)\)$/);
+      // "Title (#id)", optionally followed by "[objective progress / ready to turn in]".
+      const match = entry.match(/^(.+?) \(#(\d+)\)(?: \[[^\]]*\])?$/);
       if (match) quests.push({ title: match[1], id: Number(match[2]) });
     }
   }

@@ -250,7 +250,7 @@ async function requestPlayerGuide(cfg, input, notes = { text: '', sources: [] })
   const history = (input.history || []).slice(-6)
     .map(m => `${m.role === 'user' ? 'Player' : 'Guide'}: ${String(m.text || '').slice(0, 300)}`).join('\n');
   const conversation = [{ role: 'user', content: [
-    `Game context:\n${String(input.context || '(none)').slice(0, 2000)}`,
+    `Game context:\n${String(input.context || '(none)').slice(0, 6000)}`,
     notes.text ? `Wowhead Forever reference for quests the player mentioned:\n${notes.text}` : '',
     history ? `Recent conversation (context only; earlier guide replies may be wrong):\n${history}` : '',
     `Player question: ${String(input.text || '').slice(0, 1000)}`,

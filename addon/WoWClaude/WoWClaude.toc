@@ -6,5 +6,6 @@
 ## SavedVariables: WoWClaudeDB
 
 Codec.lua
+GameState.lua
 Inbox.lua
 WoWClaude.lua

@@ -64,7 +64,7 @@ Wowhead has no official API. The companion uses the JSON endpoints behind Wowhea
 | `playerGuide.maxRounds` | `4` | Model calls per question; the last one cannot call tools, so an answer always arrives |
 | `playerGuide.timeoutMs` | `60000` | Deadline for the whole answer, including lookups |
 
-The add-on sends a compact list of up to 25 visible quests plus objectives and instructions for the selected or tracked quest. It does not read the rendered screen. If several quests are open and none is selected or tracked, name or shift-click the quest when asking which one you mean.
+The add-on sends every quest in your log with its objective progress and turn-in state, and the full text, next step and turn-in text for the selected or tracked quest. It does not read the rendered screen. If several quests are open and none is selected or tracked, name or shift-click the quest when asking which one you mean.
 
 ### Hosted Gemma 4
 
@@ -106,14 +106,14 @@ The setup script normally owns these values:
 | `capture.intervalMs` | `250` | Screen capture interval |
 | `slots` | `200` | Load-on-demand response slots per UI session |
 
-`gameContext: false` disables sending character/location/quest context to the brain. Internal names still say `WoWClaude` because changing them would break upstream transport compatibility and existing SavedVariables.
+`gameContext: false` disables sending character/location/quest context to the brain. `gameContextMaxChars` (default `3500`) caps the game context assembled for each question from the add-on's game state sections; the sections the question is about are kept first (see [ARCHITECTURE.md](ARCHITECTURE.md#game-state-sections)). In game, `/wow-claude context off` clears every section the companion holds and stops sending them. Internal names still say `WoWClaude` because changing them would break upstream transport compatibility and existing SavedVariables.
 
 ## Runtime files
 
 | File | Purpose |
 |---|---|
 | `bridge/config.json` | Local paths and provider configuration |
-| `bridge/state.json` | Deduplication, heartbeat, and last game context |
+| `bridge/state.json` | Deduplication, heartbeat, and the latest game state sections |
 | `bridge/transcripts.json` | Short local per-chat history and reset recovery |
 | `bridge/bridge.log` | Redacted worker log |
 | `bridge/audio/` | Ephemeral Fish WAV files, deleted after the companion reads them |
