@@ -88,7 +88,7 @@ Set `provider` to `gemini` and choose `gemma-4-26b-a4b-it` or `gemma-4-31b-it`. 
 | `fish.fillers` | built in | Filler lines to pick from, e.g. `["Let me check that."]` |
 | `fish.timeoutMs` | `60000` | Synthesis timeout |
 
-The companion's built-in voice choices are Peon (`06c4b6c98f8a451cad28734427faaa9d`), Furbolg (`fa4d72bfeee64c029970e09aeb67c43e`), Knight (`b31185cef9d54e908c58dfe901e9598b`), and Asmongold (`fb029f2d4c6c4405bd5b476b536519ae`). Choosing one fills the same editable `fish.voiceId` field; an existing custom ID stays intact and appears as **Custom model ID**. Peon remains the fresh-install default. Fish's model API reported the three new models as public and trained, but `licensed: false` at the time of addition. Public visibility does not establish permission to publish generated audio or imply an endorsement.
+The companion's built-in voice choices are Peon (`06c4b6c98f8a451cad28734427faaa9d`), Furbolg (`fa4d72bfeee64c029970e09aeb67c43e`), and Knight (`b31185cef9d54e908c58dfe901e9598b`). Peon and Knight select their matching talking portraits in the minimized in-game bar. Choosing a voice fills the same editable `fish.voiceId` field; an existing custom ID stays intact and appears as **Custom model ID**. Peon remains the fresh-install default. Public model visibility does not establish permission to publish generated audio or imply an endorsement.
 
 Streamed output is 44.1 kHz mono 16-bit PCM; the one-shot path returns 44.1 kHz mono WAV. If the stream fails before any audio played, the answer is synthesized through the one-shot path instead, so a socket problem costs time but not the reply. Check the model page and Fish account terms before distribution.
 

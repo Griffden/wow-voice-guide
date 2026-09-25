@@ -252,6 +252,7 @@ function luaTable(globalName, records, opts = {}) {
     `\tts = ${luaStr(new Date(now).toISOString())},`,
     `\tnow = ${Math.floor(now / 1000)},`,
     `\tcwd = ${luaStr(opts.cwd || '')},`,
+    `\tportrait = ${luaStr(['peon', 'knight'].includes(opts.portrait) ? opts.portrait : 'guide')},`,
     // The companion's announcement switches, so the add-on stops sending
     // moments nobody will speak.
     ...(opts.announce ? [`\tannounce = { ${Object.entries(opts.announce).filter(([k, v]) => /^\w+$/.test(k) && typeof v === 'boolean').map(([k, v]) => `${k} = ${v}`).join(', ')} },`] : []),
@@ -266,6 +267,7 @@ function luaTable(globalName, records, opts = {}) {
     lines.push(`\t\t\tcwd = ${luaStr(r.cwd || '')},`);
     lines.push(`\t\t\tsession = ${luaStr(r.session || '')},`);
     if (r.transcript) lines.push(`\t\t\ttranscript = ${luaStr(r.transcript)},`);
+    if (Number.isFinite(r.speechEndsAt) && r.speechEndsAt > 0) lines.push(`\t\t\tspeechEndsAt = ${r.speechEndsAt},`);
     if (r.waypoint) {
       lines.push(`\t\t\twaypoint = { mapId = ${Number(r.waypoint.mapId) || 0}, x = ${Number(r.waypoint.x) || 0}, y = ${Number(r.waypoint.y) || 0}, label = ${luaStr(r.waypoint.label || '')} },`);
     }

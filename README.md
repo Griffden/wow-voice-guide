@@ -11,7 +11,8 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Capability | What you can do |
 |---|---|
 | Hands-free questions | Press the in-game **Talk** button, `/voice`, or a keybind; Deepgram Flux detects when you finish talking. The companion's **Finish now** and **Cancel listening** buttons are fallbacks. |
-| Spoken character voices | Hear replies through Fish Audio, streamed: speech starts on the answer's first sentence while the rest is still being written, and a short "Let me check that." covers a slow lookup. Both can be turned off in companion Settings. Pick Peon, Furbolg, Knight, or Asmongold in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
+| Spoken character voices | Hear replies through Fish Audio, streamed: speech starts on the answer's first sentence while the rest is still being written, and a short "Let me check that." covers a slow lookup. Both can be turned off in companion Settings. Pick Peon, Furbolg, or Knight in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
+| Talking portrait | Minimize the in-game window to its top bar. The Peon voice shows the animated orc portrait; the Warcraft 3 Knight voice shows the animated Knight portrait based on the supplied image. Other voices show a neutral guide icon. The portraits move during spoken replies and return to their resting frame afterward. If the client cannot read the live audio signal, the add-on estimates speaking time from the reply. Click the bar to reopen the full window. |
 | Character-aware answers | Ask about your character, level, zone, map position, money, XP and rested XP, hearthstone, talents (read through the Forever client's `C_Traits` talent API), professions, equipped gear and item levels, low durability, bag space, and the flight paths you know (read whenever you open a flight map). The add-on pushes each of these as it changes, so the guide always has the latest state. View or disable what is shared with `/wow-claude context`. |
 | Quest help | The add-on sends every quest in your log with its objective progress and whether it is ready to turn in, plus the full text, next step and turn-in text of the selected or tracked quest, and the quests you have completed. Ask where to go, what an objective means, or what to do next. |
 | NPC and target awareness | When you talk to an NPC, the guide sees what they said and which quests they offer or accept (with quest IDs), so "what is he asking me to do?" works. It also knows your current target's name, level, elite/rare status, creature type and whether it is hostile. It never reads health, auras or cooldowns. |
@@ -80,7 +81,15 @@ Both the normal-answer and web-lookup prompts default to **World of Warcraft: Fo
 - One brain-provider key: OpenAI or Google, unless using a local OpenAI-compatible server
 - A Fish Audio voice model ID only if you want a voice outside the built-in choices
 
-The example configuration still preselects [Warcraft 3 Peon](https://fish.audio/m/06c4b6c98f8a451cad28734427faaa9d/). The companion also offers [Furbolg (Warcraft 3 ENG)](https://fish.audio/m/fa4d72bfeee64c029970e09aeb67c43e/), [Warcraft 3 Knight](https://fish.audio/m/b31185cef9d54e908c58dfe901e9598b/), and [Asmongold](https://fish.audio/m/fb029f2d4c6c4405bd5b476b536519ae/). These are public Fish model IDs, not API credentials or official endorsements. Fish currently marks the three added models `licensed: false`; confirm your rights to use a voice before publishing generated audio. Community models can also be renamed or removed.
+The example configuration preselects [Warcraft 3 Peon](https://fish.audio/m/06c4b6c98f8a451cad28734427faaa9d/). The companion also offers [Furbolg (Warcraft 3 ENG)](https://fish.audio/m/fa4d72bfeee64c029970e09aeb67c43e/) and [Warcraft 3 Knight](https://fish.audio/m/b31185cef9d54e908c58dfe901e9598b/). These are Fish model IDs, not API credentials or official endorsements. Check your rights to use a voice before publishing generated audio; community models can be renamed or removed.
+
+### Talking head examples
+
+The minimized in-game bar pairs the Peon voice with the orc portrait and the Knight voice with the Knight portrait. Each sheet shows the resting frame followed by three speaking frames; the add-on cycles the speaking frames while the agent talks. Furbolg and custom voices show a neutral guide icon.
+
+| Warcraft 3 Peon | Warcraft 3 Knight |
+|---|---|
+| ![Peon talking head: resting frame and three speaking frames](concepts/talking-head-final-preview.png) | ![Knight talking head: resting frame and three speaking frames](concepts/knight-final-preview.png) |
 
 ## Install from source (Windows)
 
@@ -105,7 +114,7 @@ You need the Forever beta client, Node.js 22.12+, a Deepgram key for transcripti
    npm start
    ```
 
-4. In companion **Settings**, enter your Deepgram API key, select a brain preset and enter that provider's key (OpenAI if you want web lookup), and enter your Fish Audio API key. Choose one of the four built-in Fish voices or paste a custom model ID. Peon remains the initial choice. Click **Save and restart bridge**. Windows may ask for microphone permission on your first Talk request.
+4. In companion **Settings**, enter your Deepgram API key, select a brain preset and enter that provider's key (OpenAI if you want web lookup), and enter your Fish Audio API key. Choose one of the three built-in Fish voices or paste a custom model ID. Peon remains the initial choice. Click **Save and restart bridge**. Windows may ask for microphone permission on your first Talk request.
 
 5. In game, use `/voice-guide` to open the window and press **Talk**. Speak, then pause; the answer should appear in game and play through Fish. Bind a key in WoW's Key Bindings menu or run `/wow-claude bind F8` (replace `F8` with your preferred key) to ask without reopening the window. `/voice` also starts listening immediately.
 

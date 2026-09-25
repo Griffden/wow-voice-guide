@@ -39,6 +39,7 @@ local STRIP_SECONDS = 40 -- max per message; it leaves the strip as soon as the 
 local POLL_SCHEDULE = { 5, 10, 16, 24, 34, 46, 60, 80, 100, 130, 160, 200, 240, 300 }
 local POLL_TAIL = 60
 local TICK_SECONDS = 2
+local PORTRAIT_CYCLE = { 1, 2, 3, 1, 3, 2, 0 }
 local CONNECT_WAIT = 15 -- seconds the Connect button waits for the bridge before giving up
 local IDLE_POLL_SECONDS = 600 -- without the sound channel, spend one slot this often while idle to check the bridge
 local RS, US = "\30", "\31" -- record / unit separators in the strip payload
@@ -393,6 +394,22 @@ local function SoundValid(path)
 	return willPlay and true or false
 end
 
+-- The desktop companion marks this silent file valid only while audio plays.
+-- It uses the same checked sound-file channel as reply readiness and presence.
+local function PollTalkingPortrait()
+	if not ui.mini or not ui.mini:IsShown() then return end
+	local talking
+	if signalAvailable and db.settings.signal then
+		talking = SoundValid("Interface\\AddOns\\WoWClaude\\ctl\\talk.wav")
+	else
+		talking = run.portraitUntil and GetTime() < run.portraitUntil or false
+	end
+	if talking ~= run.talking then
+		run.talking = talking
+		WoWClaude.UpdateMini()
+	end
+end
+
 local function CheckSignal(kind, id)
 	if run.signalUnreliable then return false end
 	return SoundValid(string.format("Interface\\AddOns\\WoWClaude\\%s\\%03d.wav", kind, SlotNumber(id)))
@@ -683,6 +700,11 @@ local function ApplyReplies(replies)
 				end
 			end
 			if r.status == "done" then
+				if type(r.speechEndsAt) == "number" and (not signalAvailable or not db.settings.signal) then
+					local remaining = math.min(120, r.speechEndsAt - time())
+					run.portraitUntil = GetTime() + math.max(2, remaining)
+					run.talking = true
+				end
 				Finish(c, "claude", r.text or "", denied, r.waypoint)
 			elseif r.status == "error" then
 				Finish(c, "system", "Bridge error: " .. tostring(r.text), denied)
@@ -759,6 +781,7 @@ local function TryLoadSlot(why)
 		NotedBridge(GetTime() - (time() - data.now))
 	end
 	if type(data) == "table" and type(data.cwd) == "string" and data.cwd ~= "" then run.bridgeCwd = data.cwd end
+	if type(data) == "table" and type(data.portrait) == "string" then WoWClaude.SetPortrait(data.portrait) end
 	local matched = ApplyReplies(type(data) == "table" and data.replies or nil)
 	if type(data) == "table" and data.restore then ImportRestore(data.restore) end
 	if type(data) == "table" then WoWClaude.ApplyAnnounceSettings(data.announce) end
@@ -870,6 +893,7 @@ local function ProcessInbox()
 	local inbox = WoWClaude_Inbox
 	if type(inbox) ~= "table" then return end
 	if type(inbox.cwd) == "string" and inbox.cwd ~= "" then run.bridgeCwd = inbox.cwd end
+	if type(inbox.portrait) == "string" then WoWClaude.SetPortrait(inbox.portrait) end
 	ApplyReplies(inbox.replies)
 	if inbox.restore then ImportRestore(inbox.restore) end
 end
@@ -2139,15 +2163,47 @@ function WoWClaude.RenderChatList()
 	end
 end
 
+function WoWClaude.UpdatePortrait()
+	if not ui.miniPortrait or not ui.miniPortrait:IsShown() then return end
+	local frame = 0
+	if run.talking then
+		frame = PORTRAIT_CYCLE[(math.floor(GetTime() / 0.14) % #PORTRAIT_CYCLE) + 1]
+	end
+	if frame ~= ui.portraitFrame then
+		ui.miniPortrait:SetTexCoord(frame / 4, (frame + 1) / 4, 0, 1)
+		ui.miniPortrait:ClearAllPoints()
+		ui.miniPortrait:SetPoint("CENTER", ui.portraitBorder, "CENTER", 0, frame == 2 and 1 or (frame == 3 and -1 or 0))
+		ui.portraitFrame = frame
+	end
+end
+
+function WoWClaude.SetPortrait(kind)
+	if kind ~= "peon" and kind ~= "knight" then kind = "guide" end
+	db.settings.portrait = kind
+	if not ui.miniPortrait or ui.portraitLoaded == kind then return end
+	ui.portraitLoaded = kind
+	local showImage = kind ~= "guide"
+	ui.miniPortrait:SetShown(showImage)
+	ui.miniMonogram:SetShown(not showImage)
+	if showImage then
+		ui.miniPortrait:SetTexture("Interface\\AddOns\\WoWClaude\\portrait-" .. kind)
+		ui.portraitFrame = -1
+		WoWClaude.UpdatePortrait()
+	end
+end
+
 function WoWClaude.UpdateMini()
 	if not ui.miniBadge then return end
+	WoWClaude.UpdatePortrait()
 	local unread, working = 0, 0
 	for _, c in ipairs(db.chats) do
 		unread = unread + (c.unread or 0)
 		if c.pendingId then working = working + 1 end
 	end
 	local t
-	if working > 0 and unread > 0 then
+	if run.talking then
+		t = "|cffffd100speaking...|r"
+	elseif working > 0 and unread > 0 then
 		t = "|cff55ff55" .. unread .. " new|r |cffffd100" .. working .. " working|r"
 	elseif working > 0 then
 		t = "|cffffd100" .. (working == 1 and "working..." or (working .. " working...")) .. "|r"
@@ -2158,7 +2214,7 @@ function WoWClaude.UpdateMini()
 	end
 	ui.miniBadge:SetText(t)
 	if ui.miniPulse then
-		if unread > 0 then
+		if unread > 0 and not run.talking then
 			if not ui.miniPulse:IsPlaying() then ui.miniPulse:Play() end
 		else
 			ui.miniPulse:Stop()
@@ -2824,7 +2880,7 @@ local function BuildUI()
 	-- Mini bar: what the window collapses into. Click it to expand, drag to move.
 	local m = CreateFrame("Frame", "WoWClaudeMini", UIParent, "BackdropTemplate")
 	ui.mini = m
-	m:SetSize(250, 30)
+	m:SetSize(310, 52)
 	if s.miniPoint then
 		m:SetPoint(s.miniPoint, UIParent, s.miniRelPoint or s.miniPoint, s.miniX or 0, s.miniY or 0)
 	else
@@ -2855,8 +2911,31 @@ local function BuildUI()
 	m:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 	m:Hide()
 
+	local portraitBorder = m:CreateTexture(nil, "BACKGROUND")
+	portraitBorder:SetSize(48, 48)
+	portraitBorder:SetPoint("LEFT", m, "LEFT", 3, 0)
+	portraitBorder:SetColorTexture(0.54, 0.42, 0.20, 1)
+	ui.portraitBorder = portraitBorder
+	local portrait = m:CreateTexture("WoWClaudeMiniPortrait", "ARTWORK")
+	portrait:SetSize(44, 44)
+	portrait:SetPoint("CENTER", portraitBorder, "CENTER", 0, 0)
+	ui.miniPortrait = portrait
+	local monogram = m:CreateFontString("WoWClaudeMiniMonogram", "OVERLAY", "GameFontNormalLarge")
+	monogram:SetPoint("CENTER", portraitBorder, "CENTER", 0, 0)
+	monogram:SetText("V")
+	ui.miniMonogram = monogram
+	WoWClaude.SetPortrait(s.portrait or "peon")
+	m:SetScript("OnUpdate", function(self, elapsed)
+		self.portraitPoll = (self.portraitPoll or 0) + elapsed
+		if self.portraitPoll >= 0.4 then
+			self.portraitPoll = 0
+			PollTalkingPortrait()
+		end
+		if run.talking then WoWClaude.UpdatePortrait() end
+	end)
+
 	local miniDotHolder, miniDot = MakeDot(m)
-	miniDotHolder:SetPoint("LEFT", m, "LEFT", 9, 0)
+	miniDotHolder:SetPoint("LEFT", m, "LEFT", 59, 0)
 	ui.miniDot = miniDot
 
 	local mlabel = m:CreateFontString(nil, "OVERLAY", "GameFontNormal")
@@ -2929,6 +3008,7 @@ function WoWClaude.Minimize(mini)
 		db.settings.shown = true
 		ui.frame:Hide() -- OnHide shows the mini bar
 		if ui.mini and not ui.mini:IsShown() then ui.mini:Show() end
+		PollTalkingPortrait()
 		WoWClaude.UpdateMini()
 	else
 		WoWClaude.Toggle(true)

@@ -706,6 +706,48 @@ test('minimize collapses to the mini bar and back; the mini bar X hides everythi
   assert.equal(vm.evaluate('WoWClaudeDB.settings.shown'), 'false');
 });
 
+test('the minimized portrait uses the player image and talks only while audio is signalled', () => {
+  const vm = newVM();
+  vm.run('STUB.sounds["Interface\\\\AddOns\\\\WoWClaude\\\\ctl\\\\valid.wav"] = true');
+  login(vm);
+  vm.run('WoWClaude.Minimize(true)');
+  assert.equal(vm.evaluate('WoWClaudeMiniPortrait.texture'), 'Interface\\AddOns\\WoWClaude\\portrait-peon');
+  assert.equal(vm.num('WoWClaudeMiniPortrait.texCoords[1]'), 0);
+  vm.run('STUB.sounds["Interface\\\\AddOns\\\\WoWClaude\\\\ctl\\\\talk.wav"] = true; STUB.now = 1000.2; WoWClaudeMini.scripts.OnUpdate(WoWClaudeMini, 0.4)');
+  assert.notEqual(vm.num('WoWClaudeMiniPortrait.texCoords[1]'), 0);
+  assert.ok(vm.evaluate('table.concat(STUB.texts, "|")').includes('speaking'));
+  vm.run('STUB.sounds["Interface\\\\AddOns\\\\WoWClaude\\\\ctl\\\\talk.wav"] = nil; WoWClaudeMini.scripts.OnUpdate(WoWClaudeMini, 0.4)');
+  assert.equal(vm.num('WoWClaudeMiniPortrait.texCoords[1]'), 0);
+});
+
+test('the portrait animates from the reply deadline when the game sound channel is unusable', () => {
+  const vm = newVM();
+  login(vm); // the stub reproduces a client where the sound-file self-test fails
+  connect(vm);
+  vm.run('WoWClaude.Minimize(true); WoWClaude.StartVoice()');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), portrait = "knight", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "A spoken reply", speechEndsAt = time() + 10 } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('WoWClaudeMiniPortrait.texture'), 'Interface\\AddOns\\WoWClaude\\portrait-knight');
+  assert.equal(vm.evaluate('WoWClaudeDB.settings.portrait'), 'knight');
+  assert.ok(vm.evaluate('table.concat(STUB.texts, "|")').includes('speaking'));
+  let moved = false;
+  for (let i = 0; i < 7; i++) {
+    vm.run('STUB.now = STUB.now + 0.14; WoWClaudeMini.scripts.OnUpdate(WoWClaudeMini, 0.14)');
+    if (vm.num('WoWClaudeMiniPortrait.y') !== 0) moved = true;
+  }
+  assert.equal(moved, true, 'the head bobs as its mouth changes');
+  vm.run('STUB.now = STUB.now + 11; WoWClaudeMini.scripts.OnUpdate(WoWClaudeMini, 0.4)');
+  assert.equal(vm.num('WoWClaudeMiniPortrait.texCoords[1]'), 0);
+  assert.equal(vm.num('WoWClaudeMiniPortrait.y'), 0);
+  vm.run('WoWClaude.SetPortrait("guide")');
+  assert.equal(vm.evaluate('WoWClaudeMiniPortrait.shown'), 'false');
+  assert.equal(vm.evaluate('WoWClaudeMiniMonogram.shown'), 'true');
+  vm.run('WoWClaude.SetPortrait("peon")');
+  assert.equal(vm.evaluate('WoWClaudeMiniPortrait.texture'), 'Interface\\AddOns\\WoWClaude\\portrait-peon');
+});
+
 test('reload mode writes the outbox for the bridge instead of drawing the strip', () => {
   const vm = newVM();
   login(vm);

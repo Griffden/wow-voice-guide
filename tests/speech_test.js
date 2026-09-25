@@ -10,6 +10,13 @@ const Speech = require('../bridge/speech');
 const Providers = require('../bridge/providers');
 const Audio = require('../bridge/audio-utils');
 
+test('speech deadline estimates when the talking portrait should rest', () => {
+  const now = 100000;
+  assert.equal(Speech.estimatedSpeechEnd('One two three four five.', { audioSent: false }, now), 105);
+  assert.equal(Speech.estimatedSpeechEnd('One two three four five.', { audioSent: true, startedAt: 98000, firstAudioMs: 1000 }, now), 102);
+  assert.equal(Speech.estimatedSpeechEnd('', { audioSent: false }, now), null);
+});
+
 // A stand-in for the `ws` WebSocket: records what the client sends, and lets
 // the test play the server.
 function fakeSocketClass({ autoOpen = true } = {}) {

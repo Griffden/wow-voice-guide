@@ -6,6 +6,7 @@ const path = require('path');
 const { fork } = require('child_process');
 const WebSocket = require('ws');
 const { redact } = require('./providers');
+const { writeTalkingSignal } = require('./talking-signal');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -14,6 +15,7 @@ let win = null;
 let bridge = null;
 let flux = null;
 let cfg = {};
+let talkingMarker = null;
 let speakingStream = null;
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
@@ -63,6 +65,15 @@ function ui(channel, value) {
 function log(line) {
   const clean = redact(line).trimEnd();
   if (clean) ui('log', clean);
+}
+
+function setTalkingMarker(active) {
+  if (talkingMarker === active) return;
+  try {
+    if (writeTalkingSignal(cfg.addonDir, active)) talkingMarker = active;
+  } catch (e) {
+    log(`Talking portrait signal failed: ${e.message}`);
+  }
 }
 
 function startBridge() {
@@ -195,6 +206,7 @@ function onBridgeMessage(message) {
   }
   else if (message.type === 'audio:play') {
     try {
+      speakingStream = null;
       const bytes = fs.readFileSync(message.file);
       try { fs.unlinkSync(message.file); } catch {}
       ui('audio:play', {
@@ -203,6 +215,7 @@ function onBridgeMessage(message) {
         volumePercent: ((cfg.audio || {}).volumePercent ?? 125),
       });
       ui('status', { state: 'speaking', text: 'Speaking…' });
+      setTalkingMarker(true);
     } catch (e) { log(`audio playback file failed: ${e.message}`); }
   } else if (message.type === 'audio:chunk') {
     // Streamed speech: PCM chunks straight to the renderer's Web Audio queue.
@@ -216,8 +229,13 @@ function onBridgeMessage(message) {
       base64: message.base64,
       volumePercent: ((cfg.audio || {}).volumePercent ?? 125),
     });
+    setTalkingMarker(true);
   } else if (message.type === 'audio:end') {
     ui('audio:stream-end', { streamId: message.streamId, cancelled: !!message.cancelled });
+    if (message.cancelled && message.streamId === speakingStream) {
+      speakingStream = null;
+      setTalkingMarker(false);
+    }
   } else if (message.type === 'status') ui('status', message.status);
   else if (message.type === 'guide:sources') ui('guide:sources', { sources: message.sources });
 }
@@ -259,7 +277,11 @@ ipcMain.on('capture:force-end', () => {
   if (flux && flux.socket.readyState === WebSocket.OPEN) flux.socket.send(JSON.stringify({ type: 'ForceEndTurn' }));
 });
 ipcMain.on('capture:cancel', () => closeFlux('Listening cancelled.', true));
-ipcMain.on('audio:ended', () => ui('status', { state: 'idle', text: 'Ready' }));
+ipcMain.on('audio:ended', () => {
+  speakingStream = null;
+  setTalkingMarker(false);
+  ui('status', { state: 'idle', text: 'Ready' });
+});
 ipcMain.on('guide:open-source', (_event, value) => {
   try {
     const url = new URL(String(value));
@@ -279,12 +301,14 @@ if (!hasSingleInstanceLock) {
 
   app.whenReady().then(() => {
     cfg = readConfig();
+    setTalkingMarker(false);
     createWindow();
     startBridge();
   });
 
   app.on('before-quit', () => {
     app.isQuitting = true;
+    setTalkingMarker(false);
     closeFlux('', false);
     if (bridge) bridge.kill();
   });

@@ -168,8 +168,10 @@ test('slotNumber wraps and SILENT_WAV is a valid RIFF header', () => {
 test('luaTable includes a voice transcript and validated waypoint fields', () => {
   const lua = P.luaTable('Inbox', [{
     chat: 'c', id: 3, status: 'done', text: 'answer', transcript: 'question',
+    speechEndsAt: 12345,
     waypoint: { mapId: 1431, x: 0.452, y: 0.678, label: 'Darkshire' },
   }], { now: 1 });
   assert.ok(lua.includes('transcript = "question"'));
+  assert.ok(lua.includes('speechEndsAt = 12345'));
   assert.ok(lua.includes('waypoint = { mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }'));
 });

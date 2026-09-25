@@ -43,6 +43,19 @@ function spokenText(text) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// A fallback for game clients whose sound API reports empty files as playable.
+// The addon receives this deadline with the text reply and can still animate
+// its portrait without a live audio signal.
+function estimatedSpeechEnd(text, speaker, now = Date.now()) {
+  const words = spokenText(text).split(/\s+/).filter(Boolean).length;
+  if (!words) return null;
+  const seconds = Math.max(3, Math.min(120, words / 2.5 + (speaker.fillerSaid ? 2 : 0)));
+  const startMs = speaker.audioSent && speaker.firstAudioMs != null
+    ? speaker.startedAt + speaker.firstAudioMs
+    : now + 1500;
+  return Math.ceil(startMs / 1000 + seconds);
+}
+
 // ---------------------------------------------------------------------------
 // Fish streaming session
 // ---------------------------------------------------------------------------
@@ -382,5 +395,5 @@ class Speaker {
 
 module.exports = {
   FISH_LIVE_URL, PCM_RATE, DEFAULT_FILLERS,
-  spokenText, FishStream, SentenceSplitter, partialString, speechFields, SpeechFieldStream, Speaker,
+  spokenText, estimatedSpeechEnd, FishStream, SentenceSplitter, partialString, speechFields, SpeechFieldStream, Speaker,
 };

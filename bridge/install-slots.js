@@ -57,6 +57,8 @@ for (let k = 1; k <= PRESENCE; k++) {
 // Control files for the addon's self-test: one always empty, one always valid.
 ensure(path.join(addons, 'WoWClaude', 'ctl', 'empty.wav'), '');
 ensure(path.join(addons, 'WoWClaude', 'ctl', 'valid.wav'), require('./protocol').SILENT_WAV);
+// The companion flips this silent file for the in-game talking portrait.
+ensure(path.join(addons, 'WoWClaude', 'ctl', 'talk.wav'), '');
 
 console.log(`slots: ${N}  files created: ${made}  already present: ${kept}`);
 if (made > 0) console.log('Now fully quit and relaunch WoW so it sees the new files.');

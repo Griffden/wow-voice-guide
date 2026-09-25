@@ -2,7 +2,7 @@
 
 ## 1. Prepare accounts
 
-Create API keys for [Deepgram](https://console.deepgram.com/) and [Fish Audio](https://fish.audio/). The companion includes four selectable Fish voice IDs (Peon, Furbolg, Knight, and Asmongold) and also accepts a custom Fish public-library or owned voice model ID. Peon is the fresh-install default. Also prepare either an OpenAI API key, a Google AI Studio key for Gemma 4, or a running local OpenAI-compatible server.
+Create API keys for [Deepgram](https://console.deepgram.com/) and [Fish Audio](https://fish.audio/). The companion includes three selectable Fish voice IDs (Peon, Furbolg, and Knight) and also accepts a custom Fish public-library or owned voice model ID. Peon is the fresh-install default. Also prepare either an OpenAI API key, a Google AI Studio key for Gemma 4, or a running local OpenAI-compatible server.
 
 ## 2. Install the source build
 
@@ -22,6 +22,8 @@ node setup.js --wow "D:\World of Warcraft\_classic_beta_"
 If more than one account exists under `WTF\Account`, pass `--account NAME`.
 
 The script copies the add-on to WoW, creates `bridge/config.json`, builds 200 load-on-demand response slots, and creates the signal files. The large count of small generated files is expected.
+
+After updating an existing installation, run `node setup.js` again and fully restart WoW so it loads both portrait textures and the audio signal file.
 
 ## 3. Restart WoW
 
@@ -52,6 +54,7 @@ In game:
 - `/voice` begins the same one-press listening flow immediately.
 - The companion's **Finish now** forces a slow/paused turn to end.
 - The answer appears in game and plays through the desktop companion in the selected Fish voice.
+- Minimize the in-game window to see the Peon or Knight talking portrait paired with its Fish voice in the top bar. Other voices show a neutral guide icon.
 
 ## Troubleshooting
 

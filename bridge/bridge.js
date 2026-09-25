@@ -28,6 +28,7 @@ const P = require('./protocol'); // the pure protocol code, unit-tested in tests
 const Providers = require('./providers');
 const GameState = require('./gamestate');
 const Speech = require('./speech');
+const VoicePresets = require('./voice-presets');
 const Announce = require('./announce');
 
 const HERE = __dirname;
@@ -208,7 +209,12 @@ function atomicWrite(file, content) {
 
 // Slot file / Inbox.lua body: see protocol.luaTable.
 function slotFile(globalName, records) {
-  return P.luaTable(globalName, records, { cwd: DEFAULT_CWD, restore: pendingRestore, announce: Announce.settings(cfg) });
+  return P.luaTable(globalName, records, {
+    cwd: DEFAULT_CWD,
+    restore: pendingRestore,
+    announce: Announce.settings(cfg),
+    portrait: VoicePresets.portraitForVoiceId((cfg.fish || {}).voiceId),
+  });
 }
 
 function addonInstalled() {
@@ -551,7 +557,11 @@ async function runAssistantJob(job, text) {
     if (answer.sources && process.send) process.send({ type: 'guide:sources', sources: answer.sources });
     // The text goes to the game at once; speech that is still playing finishes on its own.
     const speech = speaker ? speaker.finish(answer.streamed ? '' : answer.speech) : null;
-    finish(job, 'done', answer.display, '', [], { transcript: job.transcript, waypoint: answer.waypoint });
+    finish(job, 'done', answer.display, '', [], {
+      transcript: job.transcript,
+      waypoint: answer.waypoint,
+      speechEndsAt: speaker ? Speech.estimatedSpeechEnd(answer.speech, speaker) : null,
+    });
     if (!speech) {
       if (process.send) process.send({ type: 'status', status: { state: 'idle', text: 'Ready' } });
       return;

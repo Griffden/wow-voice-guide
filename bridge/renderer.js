@@ -134,7 +134,10 @@ async function playStreamChunk(value) {
 }
 
 window.wowVoice.on('audio:stream', value => {
-  playStreamChunk(value).catch(error => setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` }));
+  playStreamChunk(value).catch(error => {
+    setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` });
+    window.wowVoice.audioEnded();
+  });
 });
 window.wowVoice.on('audio:stream-end', value => {
   if (!speech || speech.id !== value.streamId) return;
@@ -266,7 +269,10 @@ window.wowVoice.on('audio:play', async value => {
   playbackGain = outputChain(playbackContext);
   playbackSource.connect(playbackGain);
   player.addEventListener('ended', () => window.wowVoice.audioEnded(), { once: true });
-  player.play().catch(error => setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` }));
+  player.play().catch(error => {
+    setStatus({ state: 'error', text: `Audio playback failed: ${error.message}` });
+    window.wowVoice.audioEnded();
+  });
 });
 
 window.wowVoice.getConfig().then(applyConfig);
