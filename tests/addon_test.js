@@ -655,6 +655,7 @@ test('stops known only by name: a dungeon the world map knows becomes its entran
   // One stop is left: no route, a single waypoint on the entrance.
   assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoints'), null);
   assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoint.instance'), 'Ruins of Lordaeron');
+  assert.equal(vm.evaluate('FindButton("^Copy /way") ~= nil'), 'true');
   vm.run('local b = FindButton("^Set waypoint"); b.scripts.OnClick(b)');
   assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1420');
   assert.equal(vm.evaluate('STUB.waypoint.x'), '0.62');
