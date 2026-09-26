@@ -163,7 +163,7 @@ const GUIDE_INSTRUCTIONS = [
   'Places: never give bare coordinates. Always say the zone and where in it: the subzone, a landmark, or the direction from a town ("Dun Morogh, east of Kharanos near Ironbeard\'s Compound"). Never read coordinates aloud.',
   'steps: use them whenever the answer sends the player to two or more places or gives an ordered plan, in travel order starting from where the player is now. Each "do" is a complete instruction a player can follow alone: who to talk to and why, and for a quest item, what drops it or where it lies ("Kill Dark Iron Spies for the Dark Iron Map"). Give each NPC its own step (three turn-ins are three steps) and put the exact NPC name in "label"; the game places a waypoint on every labeled NPC. Include travel legs as steps with the right mode (boat, flight path, tram, walk), labeled with the destination. The speech then says how many stops there are and the first one, and tells the player the full list is in their window; the steps are not read aloud.',
   'x, y and sourceUrl in a step or waypoint are optional: include them only when a lookup result or cited page gave 0-100 map coordinates for that exact place; sourceUrl is that result\'s url. zone is the map those coordinates are on (a city such as Ironforge is its own map). For a place or NPC inside a dungeon or raid, or a step that enters one, set "instance" to the name of the dungeon instead of coordinates: the game puts the waypoint on the dungeon entrance.',
-  'items: every item the answer names that a Wowhead result gave an id for, so the player can inspect it.',
+  'items: every item the answer names, with its exact in-game name and the id when a Wowhead result gave one, so the player can inspect it; the game looks up the rest by name.',
   'waypoint is for an answer about a single place (it takes "instance" the same way); with steps, leave it out.',
 ].join(' ');
 
@@ -341,6 +341,25 @@ async function resolveStops(steps, known, located, signal) {
   const timeout = new Promise(resolve => setTimeout(resolve, RESOLVE_TIMEOUT_MS, []));
   const found = await Promise.race([Promise.all(names.map(n => find(n).catch(() => null))), timeout]);
   for (const entry of found || []) if (entry) located.push(entry);
+}
+
+// Items the answer names that no lookup returned (the model found them by web
+// search): each is looked up on Wowhead by its exact name and joins `known`,
+// where answerItems picks it up. A name Wowhead doesn't have stays words only.
+async function resolveItems(items, known, signal) {
+  const names = [];
+  for (const item of (items || []).slice(0, 6)) {
+    const name = clip(item && item.name, 80);
+    const id = Number(item && item.id);
+    if (!name || names.includes(name) || (Number.isInteger(id) && known.has(WowData.entityUrl('item', id)))) continue;
+    names.push(name);
+  }
+  const find = async name => {
+    const hit = (await WowData.search(name, { signal })).find(r => r.type === 'item' && r.name.toLowerCase() === name.toLowerCase());
+    if (hit) known.set(hit.url, `${hit.name} - Wowhead Forever`);
+  };
+  const timeout = new Promise(resolve => setTimeout(resolve, RESOLVE_TIMEOUT_MS));
+  await Promise.race([Promise.all(names.map(n => find(n).catch(() => null))), timeout]);
 }
 
 // The numbered list shown under the answer.
@@ -581,6 +600,7 @@ async function requestPlayerGuide(cfg, input, notes = { text: '', sources: [] })
       onProgress('Placing the route on the map…');
       await resolveStops(answer.steps, known, located, signal);
     }
+    if (answer.items.length) await resolveItems(answer.items, known, signal);
     const steps = routeSteps(answer.steps, known, located, input.context, basis);
     const labeled = labeledAnswer({ speech: answer.speech, basis, sources, question: input.text, details: stepsText(steps) });
     // A route's waypoints are its located steps, in order; otherwise one place.

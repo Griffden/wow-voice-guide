@@ -278,6 +278,24 @@ test('items the answer names are sent with ids only when a Wowhead result return
   } finally { net.restore(); }
 });
 
+test('items the model found by web search are looked up on Wowhead by exact name', async () => {
+  WOWHEAD['https://www.wowhead.com/forever/search/suggestions-template?q=Coldspire%20Staff'] = { results: [
+    { type: 3, id: 271215, name: 'Coldspire Staff', typeName: 'Item' },
+  ] };
+  WOWHEAD['https://www.wowhead.com/forever/search/suggestions-template?q=Frostbane%20Treads'] = { results: [
+    { type: 3, id: 271214, name: 'Rotmender\'s Treads', typeName: 'Item' },
+  ] };
+  const net = fakeNetwork([
+    [{ type: 'web_search_call', action: { type: 'search', sources: [] } }, ...say({ basis: 'forever', speech: 'Prioritize the Coldspire Staff; Frostbane Treads are another upgrade.',
+      items: [{ name: 'Coldspire Staff' }, { name: 'Frostbane Treads' }] })],
+  ]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Best items in the Ruins of Lordaeron?' });
+    assert.match(net.requests[0].instructions, /the game looks up the rest by name/);
+    assert.deepEqual(answer.items, [{ id: 271215, name: 'Coldspire Staff' }], 'a name Wowhead has no item for stays words only');
+  } finally { net.restore(); }
+});
+
 test('compassArea names the part of a map a point is in', () => {
   assert.equal(Providers.compassArea('Dun Morogh', 0.8, 0.2), 'north-east Dun Morogh');
   assert.equal(Providers.compassArea('Ironforge', 0.5, 0.5), 'central Ironforge');
