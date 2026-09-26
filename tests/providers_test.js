@@ -25,7 +25,7 @@ test('buildMessages supplies game context, bounded history and the current quest
   assert.deepEqual(messages.at(-1), { role: 'user', content: 'Where now?' });
   assert.match(messages[0].content, /World of Warcraft: Forever/);
   assert.match(messages[0].content, /say where it comes from instead of refusing/);
-  assert.match(messages[0].content, /"basis":"game\|forever\|classic\|general"/);
+  assert.match(messages[0].content, /"basis":"game\|forever\|classic\|lore\|general"/);
   assert.match(messages[0].content, /earlier assistant replies as potentially mistaken/);
   const withNotes = Providers.buildMessages({ context: '', history: [], text: 'Where?', notes: 'Quest 1861 "Mirror Lake"' });
   assert.match(withNotes[0].content, /Wowhead Forever reference[^\n]*\nQuest 1861 "Mirror Lake"/);

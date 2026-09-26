@@ -98,13 +98,14 @@ test('tool errors go back to the model instead of failing the answer', async () 
   } finally { net.restore(); }
 });
 
-test('Classic and general answers are labeled; game-context answers are not', async () => {
+test('Classic and general answers are labeled; game-context and lore answers are not', async () => {
   const net = fakeNetwork([
     [{ type: 'web_search_call', action: { type: 'search', sources: [{ url: 'https://www.wowhead.com/classic/quest=963' }] } },
       { type: 'message', content: [{ type: 'output_text', text: '{"speech":"Kill Anaya in the Ameth\'Aran ruins.","basis":"classic"}',
         annotations: [{ type: 'url_citation', title: 'For Love Eternal - Classic', url: 'https://www.wowhead.com/classic/quest=963' }] }] }],
     say({ speech: 'Rut\'theran Village has the boat.', basis: 'general' }),
     say({ speech: 'Your character is Griffden, level 15.', basis: 'game' }),
+    say({ speech: 'They helped reclaim Stormwind from the Orcish Horde after the First War.', basis: 'lore' }),
   ]);
   try {
     const classic = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'How do I do the Anaya quest?' });
@@ -116,6 +117,10 @@ test('Classic and general answers are labeled; game-context answers are not', as
     assert.equal(game.speech, 'Your character is Griffden, level 15.');
     assert.equal(game.display, 'Your character is Griffden, level 15.');
     assert.deepEqual(game.sources, []);
+    const lore = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Who did they help reclaim Stormwind from?' });
+    assert.equal(lore.speech, 'They helped reclaim Stormwind from the Orcish Horde after the First War.', 'lore is the same in every edition');
+    assert.equal(lore.lookup.basis, 'lore');
+    assert.match(net.requests[0].instructions, /"lore" for Warcraft story, history and characters/);
   } finally { net.restore(); }
 });
 

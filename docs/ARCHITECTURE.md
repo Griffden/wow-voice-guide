@@ -103,7 +103,8 @@ The model decides which lookups a question needs. There is no keyword router, an
 | `game` | Player's own game context, the conversation, or small talk | none, no sources shown |
 | `forever` | Wowhead Forever data or a Forever-specific page | none |
 | `classic` | Classic or Vanilla information for the same quest or place | "Based on Classic info, which may differ in Forever:" (omitted when the player asked about Classic) |
-| `general` | General WoW knowledge without a source | "I couldn't confirm this for Forever, so this is from general WoW knowledge:" |
+| `lore` | Warcraft story, history and characters, shared by every edition | none |
+| `general` | Other WoW knowledge without a source (gameplay facts that may differ in Forever) | "I couldn't confirm this for Forever, so this is from general WoW knowledge:" |
 
 A `forever` or `classic` basis with nothing looked up (no quest notes, tool calls, or web search) is downgraded to `general`. Sources are the pages cited by web search, the Wowhead entries the model opened, the step-1 quest notes, and search hits the answer names by title.
 

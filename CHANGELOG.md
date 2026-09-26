@@ -37,7 +37,7 @@ All notable changes to this project are recorded here. The format follows [Keep 
 ### Changed
 
 - Protocol: game context now travels in section records (flag `s`) that follow the hello and each change, instead of one 1.5 KB string on the hello and on messages (flag `c`). The companion still accepts `c` from older add-ons and from the reload-mode outbox, as a single legacy section.
-- The guide labels answers by what they rest on (Forever data, Classic information, or general knowledge) instead of refusing with "I couldn't verify". The keyword router that decided when to search and the URL filter that discarded unverified sources were removed.
+- The guide labels answers by what they rest on (Forever data, Classic information, or general knowledge) instead of refusing with "I couldn't verify". The keyword router that decided when to search and the URL filter that discarded unverified sources were removed. Lore questions (story, history, characters) get a `lore` basis and no caveat, since every edition shares them.
 - Player-facing branding is WoW Voice Guide. Internal `WoWClaude` identifiers remain for upstream transport and SavedVariables compatibility.
 - Claude Code execution and tool-permission handling were replaced by the voice-guide provider pipeline.
 - Fish `s2.1-pro-free` is the source-build default TTS model. The example voice is the public Warcraft 3 Peon model and may be changed in companion settings.
