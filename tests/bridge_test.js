@@ -175,3 +175,16 @@ test('luaTable includes a voice transcript and validated waypoint fields', () =>
   assert.ok(lua.includes('speechEndsAt = 12345'));
   assert.ok(lua.includes('waypoint = { mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }'));
 });
+
+test('luaTable carries a route\'s stops in order and the items an answer names', () => {
+  const lua = P.luaTable('Inbox', [{
+    chat: 'c', id: 4, status: 'done', text: 'route',
+    waypoints: [{ mapId: 1426, x: 0.648, y: 0.584, label: 'Earthseer Farsen' }, { mapId: 1455, x: 0.326, y: 0.446, label: 'Thom "Filch"' }],
+    items: [{ id: 190501, name: 'Golemheart Stave' }],
+  }], { now: 1 });
+  assert.ok(lua.includes('waypoints = { { mapId = 1426, x = 0.648, y = 0.584, label = "Earthseer Farsen" }, { mapId = 1455, x = 0.326, y = 0.446, label = "Thom \\"Filch\\"" } },'));
+  assert.ok(lua.includes('items = { { id = 190501, name = "Golemheart Stave" } },'));
+  const inside = P.luaTable('Inbox', [{ chat: 'c', id: 5, status: 'done', text: 'x',
+    waypoints: [{ instance: 'Ruins of Lordaeron', label: 'Captain Truman' }, { mapId: 1453, x: 0.5, y: 0.5, label: 'A' }] }], { now: 1 });
+  assert.ok(inside.includes('waypoints = { { instance = "Ruins of Lordaeron", label = "Captain Truman" }, { mapId = 1453'));
+});

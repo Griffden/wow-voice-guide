@@ -212,6 +212,27 @@ function questInfo(query, { player = {}, completed = new Set(), active = new Set
 }
 
 // Givers with coordinates as lookup results, for waypoints (providers.js).
+// Where a quest-giving NPC stands, by name: { name, location: { uiMapId, zone,
+// coords } } from the first quest that gives both, or null. Route stops the
+// guide named without coordinates are placed with this (providers.js).
+let giverIndex = null;
+function npcLocation(name) {
+  const db = load();
+  if (!giverIndex || giverIndex.db !== db) {
+    const byName = new Map();
+    for (const q of Object.values(db.quests || {})) {
+      for (const g of q.g || []) {
+        if (!g[0] || g.length < 4) continue;
+        const npc = npcName(g[0]);
+        const key = words(npc);
+        if (key && !byName.has(key)) byName.set(key, { name: npc, location: { uiMapId: g[3], zone: mapName(g[3]), coords: [[g[1], g[2]]] } });
+      }
+    }
+    giverIndex = { db, byName };
+  }
+  return giverIndex.byName.get(words(name)) || null;
+}
+
 function locatedGivers(results) {
   const out = [];
   for (const r of results || []) {
@@ -251,5 +272,5 @@ function asksForQuests(question) {
 
 module.exports = {
   DB_FILE, load, use, available, questsNear, questInfo, zoneSummary, nearbyNotes, asksForQuests,
-  locatedGivers, mapName, mapIdByName, npcName, direction, wowheadUrl,
+  locatedGivers, npcLocation, mapName, mapIdByName, npcName, direction, wowheadUrl,
 };

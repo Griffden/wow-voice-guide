@@ -299,6 +299,28 @@ test('NPC dialogs, the target, flight paths, gear and turn-ins become sections a
   assert.equal(vm.evaluate('STUB.healthRead'), null, 'no health was ever read');
 });
 
+test('in a dungeon, secret target values and a failing section neither throw nor stop the other sections', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  // Instance mobs: name, level, reaction and GUID come back secret.
+  vm.run(`STUB.target = { name = STUB.Secret(), level = STUB.Secret(), reaction = STUB.Secret(), guid = STUB.Secret(), creatureType = "Humanoid" }
+    STUB.FireEvent("PLAYER_TARGET_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  assert.equal(vm.evaluate('WoWClaudeDB.errorLog'), null, 'secret values are treated as unavailable, not errors');
+  // A section whose builder throws is logged once with a count; the others still go out.
+  vm.run(`WoWClaude_State.Gear = function() error("gear read rejected") end
+    for i = 1, 3 do STUB.FireEvent("PLAYER_EQUIPMENT_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers() end
+    STUB.target = { name = "Dark Iron Spy", level = 22, reaction = 2 }
+    STUB.FireEvent("PLAYER_TARGET_CHANGED"); STUB.FireEvent("PLAYER_EQUIPMENT_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  assert.equal(stateOnStrip(vm).sections.target, 'Target: Dark Iron Spy, level 22, hostile');
+  assert.equal(vm.num('#WoWClaudeDB.errorLog'), 1);
+  assert.equal(vm.evaluate('WoWClaudeDB.errorLog[1].where'), 'state.gear');
+  assert.equal(vm.num('WoWClaudeDB.errorLog[1].count'), 4);
+  assert.match(vm.evaluate('WoWClaudeDB.errorLog[1].msg'), /gear read rejected/);
+});
+
 test('completed quest ids compress into runs and split into chunks that decode on their own', () => {
   const vm = newVM();
   vm.run('CHUNKS, COUNT = WoWClaude_State.EncodeIds({ 10, 11, 12, 13, 50, 9000, 9001, 50 }, 1000)');
@@ -528,6 +550,88 @@ test('one in-game voice action carries the voice flag, replaces the placeholder 
   vm.run('WoWClaude.SetWaypoint(WoWClaudeDB.chats[1].history[2].waypoint)');
   assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1431');
   assert.equal(vm.evaluate('STUB.superTrackedWaypoint'), 'true');
+});
+
+test('a route answer shows a button per stop, sets them in order as the player arrives, and item buttons link the item', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end
+    function Click(pattern) local b = FindButton(pattern); b.scripts.OnClick(b) end`);
+  vm.run('WoWClaude.Send("Give me waypoints for each one")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three stops.",
+    waypoint = { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" },
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { mapId = 1431, x = 0.2, y = 0.5, label = "Bravo" }, { mapId = 1431, x = 0.3, y = 0.5, label = "Charlie" } },
+    items = { { id = 2140, name = "Fine Longsword" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.num('#WoWClaudeDB.chats[1].history[2].waypoints'), 3);
+  assert.equal(vm.num('WoWClaudeDB.chats[1].history[2].items[1].id'), 2140);
+  for (const label of ['Start route %(3 stops%)', '^1%. Alpha', '^2%. Bravo', '^3%. Charlie', 'Fine Longsword']) {
+    assert.equal(vm.evaluate(`FindButton("${label}") ~= nil`), 'true', label);
+  }
+  assert.equal(vm.evaluate('FindButton("^Set waypoint")'), null, 'a route replaces the single waypoint button');
+  // Start: stop 1 is set and the button becomes Next stop.
+  vm.run('Click("Start route")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.1');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('stop 1 of 3: Alpha'));
+  assert.equal(vm.evaluate('FindButton("Next stop %(2/3%)") ~= nil'), 'true');
+  assert.equal(vm.evaluate('FindButton("^> 1%. Alpha") ~= nil'), 'true');
+  // Arriving at stop 1 moves the waypoint to stop 2.
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  // Next stop skips ahead; after the last one the route ends.
+  vm.run('Click("Next stop")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  vm.run('Click("Finish route")');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('route complete'));
+  assert.equal(vm.evaluate('FindButton("Start route") ~= nil'), 'true');
+  // A stop's own button starts the route there.
+  vm.run('Click("^2%. Bravo")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  // Shift-click on an item links it like any item link.
+  vm.run('IsModifiedClick = function(k) return k == "CHATLINK" end; HandleModifiedItemClick = function(link) STUB.linked = link end; Click("Fine Longsword")');
+  assert.equal(vm.evaluate('STUB.linked'), 'item:2140');
+});
+
+test('a stop inside a dungeon is set on the entrance the world map shows, and entering the dungeon reaches it', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.entrances[1420] = { { "Ruins of Lordaeron", 0.62, 0.73 } }
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Route for the Ruins of Lordaeron quests")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Two stops.",
+    waypoints = { { instance = "Ruins of Lordaeron", label = "Captain Truman" }, { mapId = 1453, x = 0.634, y = 0.758, label = "General Marcus Jonathan" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('FindButton("^1%. Captain Truman %(Ruins of Lordaeron entrance%)") ~= nil'), 'true');
+  vm.run('local b = FindButton("Start route"); b.scripts.OnClick(b)');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1420', 'the waypoint is on the zone outside, not the dungeon');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.62');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('Captain Truman (Ruins of Lordaeron entrance)'));
+  // Going through the portal reaches the stop; the route moves on.
+  vm.run('STUB.instance = "Ruins of Lordaeron"; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1453');
+  // A dungeon the map doesn't know says so instead of setting nothing silently.
+  vm.run('STUB.instance = nil; WoWClaude.SetWaypoint({ instance = "Hall of Nowhere", label = "x" })');
+  assert.match(vm.evaluate('STUB.prints[#STUB.prints]'), /doesn't show the entrance to Hall of Nowhere/);
+  // The command finds entrances by name, with or without "The".
+  vm.run('SlashCmdList.WOWCLAUDE("entrance the ruins of lordaeron")');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /Ruins of Lordaeron entrance: map 1420 at 62\.0, 73\.0/);
 });
 
 test('/wow-claude bind assigns a window-independent Talk hotkey', () => {

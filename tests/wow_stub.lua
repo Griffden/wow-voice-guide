@@ -15,6 +15,15 @@ STUB = {
 
 local function noop() end
 
+-- Secret values, as the client returns in instances and combat: comparing,
+-- measuring, concatenating or indexing one throws. STUB.Secret() makes one.
+local secrets = setmetatable({}, { __mode = "k" })
+local function secretError() error("attempt to use a secret value", 2) end
+local SecretMT = { __lt = secretError, __le = secretError, __len = secretError, __concat = secretError,
+	__index = secretError, __add = secretError, __sub = secretError, __tostring = secretError }
+function STUB.Secret() local v = setmetatable({}, SecretMT); secrets[v] = true; return v end
+function issecretvalue(v) return secrets[v] == true end
+
 local Methods = {}
 local FrameMT = {
 	__index = function(t, k)
@@ -214,6 +223,10 @@ C_Map = {
 	GetPlayerMapPosition = function(mapId, unit) return { x = STUB.posX or 0.452, y = STUB.posY or 0.678 } end,
 	GetMapInfo = function(mapId) return { name = "Duskwood", mapID = mapId } end,
 	SetUserWaypoint = function(point) STUB.waypoint = point end,
+	GetMapChildrenInfo = function(mapId, mapType, all)
+		if mapId == 1415 then return { { mapID = 1458, name = "Undercity" }, { mapID = 1420, name = "Tirisfal Glades" } } end
+		return {}
+	end,
 }
 UiMapPoint = {
 	CreateFromCoordinates = function(mapId, x, y) return { mapId = mapId, x = x, y = y } end,
@@ -251,7 +264,19 @@ function UnitXPMax(unit) return 5000 end
 function GetXPExhaustion() return STUB.rested end
 function IsResting() return STUB.resting end
 function GetBindLocation() return "Darkshire" end
-function IsInInstance() return false, "none" end
+function IsInInstance() if STUB.instance then return true, "party" end return false, "none" end
+function GetInstanceInfo() if STUB.instance then return STUB.instance, "party" end return "Eastern Kingdoms", "none" end
+-- Dungeon entrances on the world map: STUB.entrances[mapId] = { { name, x, y } }.
+STUB.entrances = {}
+C_EncounterJournal = {
+	GetDungeonEntrancesForMap = function(mapId)
+		local out = {}
+		for _, e in ipairs(STUB.entrances[mapId] or {}) do
+			table.insert(out, { name = e[1], position = { x = e[2], y = e[3] }, journalInstanceID = 1 })
+		end
+		return out
+	end,
+}
 -- The Forever client has the modern talent API only (no GetNumTalentTabs).
 C_SpecializationInfo = {
 	GetSpecialization = function() return 1 end,
@@ -338,6 +363,7 @@ ITEM_QUALITY2_DESC = "Uncommon"
 C_Item = {
 	GetDetailedItemLevelInfo = function(link) return STUB.ilvl and STUB.ilvl[link] end,
 	GetItemInfo = function(link)
+		if link == 2140 then link = "item:2140" end
 		if tostring(link):find("^item:2140") then return "Fine Longsword", link, 2, 19, 14, "Weapon", "One-Handed Swords" end
 	end,
 }

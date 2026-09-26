@@ -268,8 +268,15 @@ function luaTable(globalName, records, opts = {}) {
     lines.push(`\t\t\tsession = ${luaStr(r.session || '')},`);
     if (r.transcript) lines.push(`\t\t\ttranscript = ${luaStr(r.transcript)},`);
     if (Number.isFinite(r.speechEndsAt) && r.speechEndsAt > 0) lines.push(`\t\t\tspeechEndsAt = ${r.speechEndsAt},`);
-    if (r.waypoint) {
-      lines.push(`\t\t\twaypoint = { mapId = ${Number(r.waypoint.mapId) || 0}, x = ${Number(r.waypoint.x) || 0}, y = ${Number(r.waypoint.y) || 0}, label = ${luaStr(r.waypoint.label || '')} },`);
+    // A stop inside a dungeon carries its name; the add-on finds the entrance.
+    const point = p => p.instance
+      ? `{ instance = ${luaStr(p.instance)}, label = ${luaStr(p.label || '')} }`
+      : `{ mapId = ${Number(p.mapId) || 0}, x = ${Number(p.x) || 0}, y = ${Number(p.y) || 0}, label = ${luaStr(p.label || '')} }`;
+    if (r.waypoint) lines.push(`\t\t\twaypoint = ${point(r.waypoint)},`);
+    // A route: its stops in order (the add-on shows a button per stop).
+    if (Array.isArray(r.waypoints) && r.waypoints.length) lines.push(`\t\t\twaypoints = { ${r.waypoints.map(point).join(', ')} },`);
+    if (Array.isArray(r.items) && r.items.length) {
+      lines.push(`\t\t\titems = { ${r.items.map(i => `{ id = ${Number(i.id) || 0}, name = ${luaStr(i.name || '')} }`).join(', ')} },`);
     }
     if (Array.isArray(r.denied) && r.denied.length) {
       lines.push(`\t\t\tdenied = { ${r.denied.map(luaStr).join(', ')} },`);

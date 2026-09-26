@@ -112,9 +112,13 @@ The tool-using guide returns:
 {
   "speech": "answer to speak, without URLs or Markdown",
   "basis": "game | forever | classic | general",
+  "steps": [{ "do": "Get Old Ironforge Incursion from Earthseer Farsen", "label": "Earthseer Farsen", "where": "Dun Morogh, east of Kharanos", "zone": "Dun Morogh", "x": 64.8, "y": 58.4, "sourceUrl": "https://www.wowhead.com/forever/npc=1344" }],
+  "items": [{ "name": "Golemheart Stave", "id": 190501 }],
   "waypoint": { "zone": "Darkshore", "x": 35.6, "y": 43.4, "label": "Cerellean Whiteclaw", "sourceUrl": "https://www.wowhead.com/forever/npc=3644" }
 }
 ```
+
+`steps` is for answers that send the player to several places: the speech says how many stops there are and the first one, and the steps are shown (not spoken) as a numbered list under it. Each step's coordinates are kept under the same rule as a waypoint (a `sourceUrl` the lookups returned); a step without one takes the coordinates of a looked-up NPC or quest giver it names. The model often answers a route from web search alone, so the worker then places every step whose `label` is an NPC itself: the offline quest database's givers by name first, then a Wowhead search for an NPC of exactly that name and its lookup (all in parallel, at most 5 seconds; this runs for every preset). A step inside a dungeon carries `instance` (the dungeon name) instead: nothing inside has a world position, so the add-on sets the waypoint on that dungeon's entrance as the world map shows it (`C_EncounterJournal.GetDungeonEntrancesForMap` over the zone maps from `C_Map.GetMapChildrenInfo`), and a route counts the stop reached once the player is inside that instance. `/wow-claude entrance <dungeon>` tests the lookup in game. Any other step still unplaced (a town, say) stays words only. A located step with no `where` gets a compass area ("north-east Dun Morogh"). The located steps, in order, go to the add-on as `waypoints`; `waypoint` is the first of them, for older add-ons. `items` are kept only when a Wowhead search or lookup returned that item id, plus returned items the answer names that the model did not list.
 
 A waypoint is kept only if its `sourceUrl` is something a lookup or search actually returned and its label matches the conversation. The zone becomes an in-game map ID through the player's current map or `bridge/zones.json` (Wowhead zone id -> uiMapID, generated from the Forever 1.60.1.70009 `UiMap`/`UiMapAssignment` tables on wago.tools, including new Forever zones). If the model omits the waypoint but the answer names exactly one looked-up NPC with coordinates, the worker builds the waypoint from that lookup.
 
@@ -176,7 +180,7 @@ Switches live in `bridge/config.json`. `/wow-claude announce <kind> on|off` and 
 
 WoW can load an add-on's Lua files only once per UI session. Setup therefore pre-creates `WoWClaude_S001` through `WoWClaude_S200`. The bridge writes the latest reply table to every unused slot; the add-on loads the next slot and applies the record.
 
-A final voice record can include `transcript` and `waypoint`. The add-on replaces the temporary `[Voice] Listening...` user message with the transcript, adds the guide answer, and renders a waypoint button when present.
+A final record can include `transcript`, `waypoint`, `waypoints` and `items`. The add-on replaces the temporary `[Voice] Listening...` user message with the transcript, adds the guide answer, and renders a waypoint button, or for a route **Start route** / **Next stop** and a button per stop, plus a button per item (the game's own tooltip on hover, `HandleModifiedItemClick` for shift/ctrl-click). The client keeps one user waypoint, so a route sets its stops in turn and advances when the player comes within about 25 yards of the current one (`C_Map.GetWorldPosFromMapPos`); TomTom, when installed, gets every stop.
 
 Small valid/empty WAV files provide inexpensive acknowledgement, completion, action, and presence signals. Timed slot polling and the SavedVariables `/reload` route remain fallbacks.
 

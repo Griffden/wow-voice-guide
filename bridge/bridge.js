@@ -560,6 +560,8 @@ async function runAssistantJob(job, text) {
     finish(job, 'done', answer.display, '', [], {
       transcript: job.transcript,
       waypoint: answer.waypoint,
+      waypoints: answer.waypoints,
+      items: answer.items,
       speechEndsAt: speaker ? Speech.estimatedSpeechEnd(answer.speech, speaker) : null,
     });
     if (!speech) {

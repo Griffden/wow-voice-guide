@@ -200,8 +200,11 @@ local function InitDB()
 	if not FindChat(db.activeChat) then db.activeChat = db.chats[1].id end
 end
 
-local function AddHistory(chat, role, text, id, denied, waypoint)
-	table.insert(chat.history, { role = role, text = text, id = id, t = time(), denied = denied, waypoint = waypoint })
+-- extra: { waypoints = route stops in order, items = { { id, name } } } from the guide.
+local function AddHistory(chat, role, text, id, denied, waypoint, extra)
+	extra = extra or {}
+	table.insert(chat.history, { role = role, text = text, id = id, t = time(), denied = denied, waypoint = waypoint,
+		waypoints = extra.waypoints, items = extra.items })
 	while #chat.history > MAX_HISTORY do
 		table.remove(chat.history, 1)
 	end
@@ -705,7 +708,10 @@ local function ApplyReplies(replies)
 					run.portraitUntil = GetTime() + math.max(2, remaining)
 					run.talking = true
 				end
-				Finish(c, "claude", r.text or "", denied, r.waypoint)
+				Finish(c, "claude", r.text or "", denied, r.waypoint, {
+					waypoints = type(r.waypoints) == "table" and #r.waypoints > 1 and r.waypoints or nil,
+					items = type(r.items) == "table" and #r.items > 0 and r.items or nil,
+				})
 			elseif r.status == "error" then
 				Finish(c, "system", "Bridge error: " .. tostring(r.text), denied)
 			elseif r.status == "working" then
@@ -805,8 +811,9 @@ local function Tick()
 	end
 	WoWClaude.UpdateDot()
 	WoWClaude.CheckConnection()
+	if run.route then WoWClaude.Guarded("route", WoWClaude.CheckRoute) end
 	if db.settings.mode ~= "pixel" then return end
-	if db.settings.context then WoWClaude.CheckMovement(now) end
+	if db.settings.context then WoWClaude.Guarded("state.move", WoWClaude.CheckMovement, now) end
 	WoWClaude.FlushState()
 	local changed = false
 	if run.helloPollAt and now >= run.helloPollAt then
@@ -898,8 +905,8 @@ local function ProcessInbox()
 	if inbox.restore then ImportRestore(inbox.restore) end
 end
 
-Finish = function(chat, role, text, denied, waypoint)
-	AddHistory(chat, role, text, chat.pendingId, denied, waypoint)
+Finish = function(chat, role, text, denied, waypoint, extra)
+	AddHistory(chat, role, text, chat.pendingId, denied, waypoint, extra)
 	chat.pendingId = nil
 	chat.voicePending = nil
 	chat.progress = nil
@@ -950,6 +957,32 @@ local function StateRun()
 	return run.state
 end
 
+-- Game-state reads run on every target change and quest update, so a read
+-- the client rejects (dungeons are where it happens) must not throw each
+-- time. Guarded runs fn protected; a failure is kept once per place in
+-- db.errorLog (SavedVariables, shown by /wow-claude errors) with a count.
+local ERROR_LOG_MAX = 20
+local function Guarded(where, fn, ...)
+	local ok, a, b, c, d = pcall(fn, ...)
+	if ok then return true, a, b, c, d end
+	if db then
+		db.errorLog = db.errorLog or {}
+		local log = db.errorLog
+		local msg = tostring(a)
+		for _, e in ipairs(log) do
+			if e.where == where and e.msg == msg then
+				e.count, e.last = e.count + 1, date and date("%Y-%m-%d %H:%M:%S") or ""
+				return false
+			end
+		end
+		local zone = Try(GetZoneText) or ""
+		table.insert(log, { where = where, msg = msg, count = 1, zone = zone, last = date and date("%Y-%m-%d %H:%M:%S") or "" })
+		while #log > ERROR_LOG_MAX do table.remove(log, 1) end
+	end
+	return false
+end
+WoWClaude.Guarded = Guarded
+
 -- Build one section, or several for the completed-quest list.
 local function BuildSection(key, out)
 	local st = StateRun()
@@ -988,7 +1021,7 @@ end
 -- reload-mode outbox (which has no room for separate section records).
 function WoWClaude.GameContext()
 	local out = {}
-	for _, key in ipairs({ "char", "prog", "loc", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do BuildSection(key, out) end
+	for _, key in ipairs({ "char", "prog", "loc", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do Guarded("state." .. key, BuildSection, key, out) end
 	local lines = {}
 	for _, key in ipairs(State.ORDER) do
 		if out[key] and out[key] ~= "" then table.insert(lines, out[key]) end
@@ -1046,7 +1079,8 @@ function WoWClaude.FlushState(force)
 	table.sort(due)
 	for _, key in ipairs(due) do
 		st.dirty[key] = nil
-		BuildSection(key, out)
+		-- A section that fails keeps what the bridge last had.
+		Guarded("state." .. key, BuildSection, key, out)
 	end
 	local changed = {}
 	-- A full resend replaces everything the bridge had, stale keys included.
@@ -1154,14 +1188,15 @@ end
 -- Returns true when the event was one of ours.
 function WoWClaude.OnStateEvent(event, ...)
 	if not db then return false end
-	WoWClaude.AnnounceEvent(event, ...)
+	Guarded("announce." .. event, WoWClaude.AnnounceEvent, event, ...)
 	local st = StateRun()
 	if STATE_EVENTS[event] then
 		WoWClaude.MarkState(STATE_EVENTS[event])
 		return true
 	elseif DIALOG_EVENTS[event] then
 		-- The dialog API only answers while the frame is open: read it now.
-		st.dialog = State.Dialog(event)
+		local ok, dialog = Guarded("state.npc", State.Dialog, event)
+		st.dialog = ok and dialog or ""
 		WoWClaude.MarkState("npc")
 		return true
 	elseif event == "QUEST_TURNED_IN" then
@@ -1174,8 +1209,8 @@ function WoWClaude.OnStateEvent(event, ...)
 		WoWClaude.MarkState({ "quests", "quest" })
 		return true
 	elseif event == "TAXIMAP_OPENED" then
-		local mapId, names = State.TaxiNodes()
-		if #names > 0 then
+		local ok, mapId, names = Guarded("state.taxi", State.TaxiNodes)
+		if ok and #names > 0 then
 			db.taxi = db.taxi or {}
 			db.taxi[mapId] = names
 			WoWClaude.MarkState("taxi")
@@ -1369,7 +1404,89 @@ local function ContextToSend(room)
 	return ctx
 end
 
-function WoWClaude.SetWaypoint(point)
+---------------------------------------------------------------------------
+-- Dungeon entrances: a stop inside a dungeon is set on its entrance
+---------------------------------------------------------------------------
+
+-- Nothing inside a dungeon has a world position, so the guide sends its name
+-- ({ instance = "Ruins of Lordaeron" }) and the waypoint goes on the entrance
+-- the world map shows, read from C_EncounterJournal for every zone map.
+local WORLD_MAPS = { 947, 1414, 1415 } -- Azeroth, Kalimdor, Eastern Kingdoms
+
+local function DungeonKey(name)
+	return (tostring(name or ""):lower():gsub("^the%s+", ""):gsub("[^%w]", ""))
+end
+
+local entranceCache
+local function DungeonEntrances()
+	if entranceCache then return entranceCache end
+	local list = {}
+	local ej = C_EncounterJournal
+	if not (ej and ej.GetDungeonEntrancesForMap and C_Map and C_Map.GetMapChildrenInfo) then return list end
+	local zoneType = Enum and Enum.UIMapType and Enum.UIMapType.Zone or 3
+	local seen = {}
+	for _, root in ipairs(WORLD_MAPS) do
+		for _, info in ipairs(Try(C_Map.GetMapChildrenInfo, root, zoneType, true) or {}) do
+			local mapId = type(info) == "table" and info.mapID
+			if mapId and not seen[mapId] then
+				seen[mapId] = true
+				for _, e in ipairs(Try(ej.GetDungeonEntrancesForMap, mapId) or {}) do
+					local pos = type(e) == "table" and e.position
+					local x, y
+					if type(pos) == "table" then
+						x, y = pos.x, pos.y
+						if type(x) ~= "number" and pos.GetXY then x, y = pos:GetXY() end
+					end
+					if type(e) == "table" and type(e.name) == "string" and type(x) == "number" and type(y) == "number" then
+						table.insert(list, { key = DungeonKey(e.name), name = e.name, mapId = mapId, x = x, y = y })
+					end
+				end
+			end
+		end
+	end
+	-- An empty list may just mean the data wasn't ready; look again next time.
+	if #list > 0 then entranceCache = list end
+	return list
+end
+
+-- The entrance of the dungeon called `name`, as a waypoint, or nil.
+function WoWClaude.DungeonEntrance(name)
+	local key = DungeonKey(name)
+	if key == "" then return nil end
+	for _, e in ipairs(DungeonEntrances()) do
+		if e.key == key then return { mapId = e.mapId, x = e.x, y = e.y, label = e.name .. " entrance" } end
+	end
+end
+
+-- A stop as a map position: dungeon stops become their entrance. Returns
+-- nil for a dungeon whose entrance the map doesn't show.
+local function MapPoint(point)
+	if type(point) ~= "table" then return nil end
+	if type(point.mapId) == "number" then return point end
+	if type(point.instance) ~= "string" then return nil end
+	local e = WoWClaude.DungeonEntrance(point.instance)
+	if not e then return nil end
+	if point.label and point.label ~= "" and point.label ~= point.instance then e.label = point.label .. " (" .. e.label .. ")" end
+	return e
+end
+
+-- The player is inside this stop's dungeon already.
+local function InsideStopDungeon(point)
+	if type(point) ~= "table" or type(point.instance) ~= "string" or not Try(IsInInstance) then return false end
+	local name = Try(GetInstanceInfo)
+	return type(name) == "string" and DungeonKey(name) == DungeonKey(point.instance)
+end
+
+-- quiet: the caller prints its own line (a route stop).
+function WoWClaude.SetWaypoint(point, quiet)
+	if type(point) == "table" and point.instance and not point.mapId then
+		local resolved = MapPoint(point)
+		if not resolved then
+			print("WoW Voice Guide: the map doesn't show the entrance to " .. tostring(point.instance) .. "; look it up in the Dungeon Journal.")
+			return
+		end
+		point = resolved
+	end
 	if type(point) ~= "table" or type(point.mapId) ~= "number" or type(point.x) ~= "number" or type(point.y) ~= "number" then return end
 	if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates) then
 		print("WoW Voice Guide: this client does not expose user waypoints.")
@@ -1384,7 +1501,147 @@ function WoWClaude.SetWaypoint(point)
 	if set and C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
 	end
-	if set then print("WoW Voice Guide waypoint: " .. (point.label or "destination")) end
+	if set and not quiet then print("WoW Voice Guide waypoint: " .. (point.label or "destination")) end
+	return set
+end
+
+---------------------------------------------------------------------------
+-- Routes: an answer's stops, one waypoint at a time
+---------------------------------------------------------------------------
+
+-- The game keeps a single user waypoint, so a route sets its stops in turn:
+-- arriving near one (checked on the tick) moves the waypoint to the next,
+-- and the answer's "Next stop" button skips ahead. With TomTom installed,
+-- every stop is also put on the map at once.
+local ROUTE_ARRIVE_YARDS = 25
+local ROUTE_ARRIVE_MAP = 0.012 -- the same, in map units, when world positions are unavailable
+
+local function RouteStopLine(route)
+	local p = MapPoint(route.points[route.i]) or route.points[route.i]
+	return "stop " .. route.i .. " of " .. #route.points .. ": " .. tostring(p.label or "destination")
+end
+
+local function ClearTomTom(route)
+	if not (route and route.tomtom and TomTom and TomTom.RemoveWaypoint) then return end
+	for _, uid in ipairs(route.tomtom) do pcall(TomTom.RemoveWaypoint, TomTom, uid) end
+end
+
+-- points: the stops in order; startAt: the stop to go to first; msg: the
+-- history entry the route belongs to (its buttons show the progress).
+function WoWClaude.StartRoute(points, startAt, msg)
+	if type(points) ~= "table" or #points == 0 then return end
+	local previous = run.route
+	if previous and previous.msg ~= msg then ClearTomTom(previous) end
+	local route = { points = points, i = math.max(1, math.min(startAt or 1, #points)), msg = msg }
+	if previous and previous.msg == msg then route.tomtom = previous.tomtom end
+	if not route.tomtom and TomTom and TomTom.AddWaypoint then
+		route.tomtom = {}
+		for k, stop in ipairs(points) do
+			local p = MapPoint(stop)
+			if p then
+				local ok, uid = pcall(TomTom.AddWaypoint, TomTom, p.mapId, p.x, p.y, { title = k .. ". " .. tostring(p.label or ""), persistent = false })
+				if ok and uid then table.insert(route.tomtom, uid) end
+			end
+		end
+	end
+	run.route = route
+	if WoWClaude.SetWaypoint(points[route.i], true) then print("WoW Voice Guide route, " .. RouteStopLine(route)) end
+	WoWClaude.Render()
+end
+
+function WoWClaude.NextStop()
+	local route = run.route
+	if not route then return end
+	if route.i >= #route.points then
+		print("WoW Voice Guide: route complete.")
+		ClearTomTom(route)
+		run.route = nil
+		WoWClaude.Render()
+		return
+	end
+	route.i = route.i + 1
+	if WoWClaude.SetWaypoint(route.points[route.i], true) then print("WoW Voice Guide route, " .. RouteStopLine(route)) end
+	WoWClaude.Render()
+end
+
+-- Distance from the player to a stop in yards (or map units), or nil when the
+-- player is not on that stop's map.
+local function DistanceTo(point)
+	local pos = Try(C_Map.GetPlayerMapPosition, point.mapId, "player")
+	if type(pos) ~= "table" or type(pos.x) ~= "number" or type(pos.y) ~= "number" then return nil end
+	if C_Map.GetWorldPosFromMapPos and CreateVector2D then
+		local c1, a = Try(C_Map.GetWorldPosFromMapPos, point.mapId, CreateVector2D(pos.x, pos.y))
+		local c2, b = Try(C_Map.GetWorldPosFromMapPos, point.mapId, CreateVector2D(point.x, point.y))
+		if c1 and c1 == c2 and type(a) == "table" and type(b) == "table" and a.x and b.x then
+			local dx, dy = a.x - b.x, a.y - b.y
+			return math.sqrt(dx * dx + dy * dy), "yards"
+		end
+	end
+	local dx, dy = pos.x - point.x, pos.y - point.y
+	return math.sqrt(dx * dx + dy * dy), "map"
+end
+
+-- On the tick: reached the current stop, so on to the next.
+function WoWClaude.CheckRoute()
+	local route = run.route
+	if not route or not C_Map then return end
+	local stop = route.points[route.i]
+	-- Went through the portal: that dungeon stop is reached.
+	if InsideStopDungeon(stop) then
+		print("WoW Voice Guide: reached " .. tostring(stop.instance) .. ".")
+		WoWClaude.NextStop()
+		return
+	end
+	local target = MapPoint(stop)
+	if not target then return end
+	local d, unit = DistanceTo(target)
+	if d and d <= (unit == "yards" and ROUTE_ARRIVE_YARDS or ROUTE_ARRIVE_MAP) then
+		print("WoW Voice Guide: reached " .. tostring(route.points[route.i].label or "the stop") .. ".")
+		WoWClaude.NextStop()
+	end
+end
+
+---------------------------------------------------------------------------
+-- Items the guide named: real tooltips and links
+---------------------------------------------------------------------------
+
+local function ItemLink(id)
+	local _, link = Try((C_Item and C_Item.GetItemInfo) or GetItemInfo, id)
+	if not link and C_Item and C_Item.RequestLoadItemDataByID then Try(C_Item.RequestLoadItemDataByID, id) end
+	return link
+end
+
+function WoWClaude.ItemTooltip(owner, id)
+	GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+	if GameTooltip.SetItemByID then
+		GameTooltip:SetItemByID(id)
+	else
+		GameTooltip:SetHyperlink("item:" .. id)
+	end
+	GameTooltip:Show()
+end
+
+-- Shift-click links it in chat, ctrl-click tries it on, a plain click pins
+-- the item's tooltip like clicking a link in chat.
+function WoWClaude.ItemClick(id, name)
+	local link = ItemLink(id)
+	if link and HandleModifiedItemClick and IsModifiedClick and (IsModifiedClick("CHATLINK") or IsModifiedClick("DRESSUP")) then
+		HandleModifiedItemClick(link)
+		return
+	end
+	if SetItemRef then pcall(SetItemRef, "item:" .. id, link or ("[" .. tostring(name or id) .. "]"), "LeftButton") end
+end
+
+-- "|T...|t Name" in the item's quality color, for its button.
+local function ItemButtonText(id, name)
+	local _, _, quality = Try((C_Item and C_Item.GetItemInfo) or GetItemInfo, id)
+	if type(quality) ~= "number" and C_Item and C_Item.GetItemQualityByID then quality = Try(C_Item.GetItemQualityByID, id) end
+	local icon = Try((C_Item and C_Item.GetItemIconByID) or GetItemIcon, id)
+	local text = Display(name or ("item " .. id))
+	local color = type(quality) == "number" and ITEM_QUALITY_COLORS and ITEM_QUALITY_COLORS[quality]
+	if color and color.hex then text = color.hex .. text .. "|r" end
+	if icon then text = "|T" .. tostring(icon) .. ":16:16|t " .. text end
+	return text
 end
 
 -- Read a link's tooltip off a hidden GameTooltip, one line per row.
@@ -1990,10 +2247,8 @@ local function GetBubble(i)
 		WoWClaude.Allow(self.chatId, self.rules)
 	end)
 	b.allow:Hide()
-	b.waypoint = CreateFrame("Button", nil, b, "UIPanelButtonTemplate")
-	b.waypoint:SetHeight(22)
-	b.waypoint:SetScript("OnClick", function(self) WoWClaude.SetWaypoint(self.point) end)
-	b.waypoint:Hide()
+	-- Waypoint, route and item buttons under the text, made as needed (BubbleActions).
+	b.actions = {}
 	-- FontStrings can't be selected, so a click opens the message in the copy box.
 	b:EnableMouse(true)
 	b:SetScript("OnMouseUp", function(self, button)
@@ -2003,6 +2258,72 @@ local function GetBubble(i)
 	return b
 end
 
+-- The buttons under a guide answer: its route (or single waypoint) and the
+-- items it named, as { text, onClick, onEnter, newRow }.
+local function MessageActions(m)
+	local list = {}
+	if type(m) ~= "table" then return list end
+	local stops = type(m.waypoints) == "table" and #m.waypoints > 1 and m.waypoints or nil
+	if stops then
+		local route = run.route and run.route.msg == m and run.route or nil
+		if route then
+			local label = route.i < #stops and ("Next stop (" .. (route.i + 1) .. "/" .. #stops .. ")") or "Finish route"
+			table.insert(list, { text = label, onClick = WoWClaude.NextStop })
+		else
+			table.insert(list, { text = "Start route (" .. #stops .. " stops)", onClick = function() WoWClaude.StartRoute(stops, 1, m) end })
+		end
+		for k, p in ipairs(stops) do
+			local here = route and route.i == k
+			local inside = (type(p.instance) == "string" and not p.mapId) and (" (" .. Display(p.instance) .. " entrance)") or ""
+			table.insert(list, { text = (here and "> " or "") .. k .. ". " .. Display(p.label or "stop") .. inside,
+				onClick = function() WoWClaude.StartRoute(stops, k, m) end })
+		end
+	elseif type(m.waypoint) == "table" then
+		local label = (m.waypoint.label and m.waypoint.label ~= "") and (": " .. Display(m.waypoint.label)) or ""
+		table.insert(list, { text = "Set waypoint" .. label, onClick = function() WoWClaude.SetWaypoint(m.waypoint) end })
+	end
+	local first = true
+	for _, item in ipairs(type(m.items) == "table" and m.items or {}) do
+		if type(item) == "table" and type(item.id) == "number" then
+			table.insert(list, { text = ItemButtonText(item.id, item.name), newRow = first,
+				onClick = function() WoWClaude.ItemClick(item.id, item.name) end,
+				onEnter = function(self) WoWClaude.ItemTooltip(self, item.id) end })
+			first = false
+		end
+	end
+	return list
+end
+
+-- Lays the buttons out in wrapping rows below the body, `top` below it.
+-- Returns the height they take.
+local function LayoutActions(b, actions, width, top)
+	local x, y, rowH = 0, 0, 26
+	local maxW = width - 24
+	for i, a in ipairs(actions) do
+		local btn = b.actions[i]
+		if not btn then
+			btn = CreateFrame("Button", nil, b, "UIPanelButtonTemplate")
+			btn:SetHeight(22)
+			btn:SetScript("OnClick", function(self) if self.action and self.action.onClick then self.action.onClick() end end)
+			btn:SetScript("OnEnter", function(self) if self.action and self.action.onEnter then self.action.onEnter(self) end end)
+			btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+			b.actions[i] = btn
+		end
+		btn.action = a
+		btn:SetText(a.text)
+		local fs = btn:GetFontString()
+		local w = math.min(maxW, math.max(90, ((fs and fs:GetStringWidth()) or 100) + 28))
+		if x > 0 and (a.newRow or x + w > maxW) then x, y = 0, y + rowH end
+		btn:SetWidth(w)
+		btn:ClearAllPoints()
+		btn:SetPoint("TOPLEFT", b.body, "BOTTOMLEFT", x, -6 - top - y)
+		btn:Show()
+		x = x + w + 6
+	end
+	for i = #actions + 1, #b.actions do b.actions[i]:Hide() end
+	return #actions > 0 and (y + rowH + 2) or 0
+end
+
 function WoWClaude.Render()
 	local c = ActiveChat()
 	if ui.content and c then
@@ -2010,7 +2331,7 @@ function WoWClaude.Render()
 		if not width or width < 80 then width = 400 end
 		ui.content:SetWidth(width)
 		local y, n = 0, 0
-		local function Place(role, text, when, dim, denied, waypoint)
+		local function Place(role, text, when, dim, denied, msg)
 			n = n + 1
 			local b = GetBubble(n)
 			local st = ROLE_STYLE[role] or ROLE_STYLE.system
@@ -2041,17 +2362,7 @@ function WoWClaude.Render()
 			else
 				b.allow:Hide()
 			end
-			if type(waypoint) == "table" then
-				b.waypoint:ClearAllPoints()
-				b.waypoint:SetPoint("TOPLEFT", b.body, "BOTTOMLEFT", 0, -6 - extra)
-				b.waypoint:SetText("Set waypoint" .. ((waypoint.label and waypoint.label ~= "") and (": " .. Display(waypoint.label)) or ""))
-				b.waypoint:SetWidth(math.min(width - 24, 260))
-				b.waypoint.point = waypoint
-				b.waypoint:Show()
-				extra = extra + 28
-			else
-				b.waypoint:Hide()
-			end
+			extra = extra + LayoutActions(b, MessageActions(msg), width, extra)
 			b:SetHeight(6 + 12 + 4 + h + 8 + extra)
 			b:ClearAllPoints()
 			b:SetPoint("TOPLEFT", ui.content, "TOPLEFT", 0, -y)
@@ -2063,7 +2374,7 @@ function WoWClaude.Render()
 		for i, m in ipairs(c.history) do
 			-- The Allow button only makes sense on the newest reply, and only while idle.
 			local denied = (i == last and not c.pendingId and type(m.denied) == "table" and #m.denied > 0) and m.denied or nil
-			Place(m.role, m.text, m.t and date("%H:%M", m.t) or "", false, denied, m.waypoint)
+			Place(m.role, m.text, m.t and date("%H:%M", m.t) or "", false, denied, m)
 		end
 		if c.pendingId then
 			local p = c.progress
@@ -3052,6 +3363,8 @@ local HELP = table.concat({
 	"/wow-claude signal on|off          the cheap sound-file readiness check (off if it spams errors)",
 	"/wow-claude slots                  how many reply slots are still free this session",
 	"/wow-claude diag                   transport diagnostics (is the cheap sound-file channel working?)",
+	"/wow-claude errors [clear]         game-state reads the client rejected (e.g. in dungeons)",
+	"/wow-claude entrance <dungeon>     waypoint to a dungeon's entrance, as the world map shows it",
 	"/wow-claude clear                  clear this chat's transcript",
 }, "\n")
 
@@ -3255,6 +3568,32 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 			end
 		end
 		AddHistory(c, "system", "Diagnostics:\n" .. table.concat(lines, "\n"))
+		WoWClaude.Render()
+		WoWClaude.Toggle(true)
+	elseif cmd == "entrance" then
+		local e = rest ~= "" and WoWClaude.DungeonEntrance(rest)
+		if e then
+			AddHistory(c, "system", string.format("%s: map %d at %.1f, %.1f. Setting a waypoint there.", e.label, e.mapId, e.x * 100, e.y * 100))
+			WoWClaude.SetWaypoint(e)
+		else
+			AddHistory(c, "system", "No entrance found for \"" .. rest .. "\" (the world map knows " .. #DungeonEntrances() .. " dungeon entrances).")
+		end
+		WoWClaude.Render()
+		WoWClaude.Toggle(true)
+	elseif cmd == "errors" then
+		local log = db.errorLog or {}
+		if rest:lower() == "clear" then
+			db.errorLog = nil
+			AddHistory(c, "system", "Error log cleared.")
+		elseif #log == 0 then
+			AddHistory(c, "system", "No add-on errors recorded.")
+		else
+			local lines = {}
+			for _, e in ipairs(log) do
+				table.insert(lines, e.where .. " x" .. e.count .. " (" .. e.zone .. ", last " .. e.last .. "): " .. e.msg)
+			end
+			AddHistory(c, "system", "Add-on errors (caught, not shown as Lua errors):\n" .. table.concat(lines, "\n") .. "\n/wow-claude errors clear to reset.")
+		end
 		WoWClaude.Render()
 		WoWClaude.Toggle(true)
 	elseif cmd == "cancel" then

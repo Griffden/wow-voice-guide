@@ -30,11 +30,20 @@
 WoWClaude_State = {}
 local S = WoWClaude_State
 
+-- In instances and combat the client hands back "secret" values (names,
+-- levels, GUIDs...) that throw when compared, measured or pattern-matched.
+-- Try turns them into nil, so a secret reads as "not available".
+local IsSecret = type(issecretvalue) == "function" and issecretvalue or function() return false end
+local function Open(v)
+	if v ~= nil and IsSecret(v) then return nil end
+	return v
+end
+
 -- Call a game API that may not exist or may throw, and get its returns or nothing.
 local function Try(fn, ...)
 	if type(fn) ~= "function" then return nil end
 	local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
-	if ok then return a, b, c, d, e, f, g, h, i, j end
+	if ok then return Open(a), Open(b), Open(c), Open(d), Open(e), Open(f), Open(g), Open(h), Open(i), Open(j) end
 end
 S.Try = Try
 
