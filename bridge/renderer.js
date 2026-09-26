@@ -183,7 +183,7 @@ async function stopCapture() {
   await old.context.close();
 }
 
-const ANNOUNCE_BOXES = { quest: 'announceQuest', level: 'announceLevel', zone: 'announceZone', bags: 'announceBags', narrate: 'announceNarrate' };
+const ANNOUNCE_BOXES = { quest: 'announceQuest', level: 'announceLevel', zone: 'announceZone', bags: 'announceBags', narrate: 'announceNarrate', route: 'announceRoute' };
 
 function applyAnnounce(announce) {
   for (const [kind, id] of Object.entries(ANNOUNCE_BOXES)) $(id).checked = !!(announce && announce[kind] === true);

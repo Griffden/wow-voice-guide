@@ -18,6 +18,7 @@ const SECTIONS = Object.freeze([
   { key: 'legacy', weight: 100 },
   { key: 'char', weight: 100 },
   { key: 'loc', weight: 95 },
+  { key: 'ways', weight: 40 },
   { key: 'prog', weight: 50 },
   { key: 'target', weight: 70 },
   { key: 'npc', weight: 75 },
@@ -40,6 +41,7 @@ const BOOSTS = Object.freeze({
   prog: /\b(money|gold|silver|xp|experience|rested|level(?:ing)?|ding)\b/,
   char: /\b(hearth(?:stone)?|home|bind)\b/,
   quest: /\b(quest|objective|turn in|where (?:do i|should i) go|next|task)\b/,
+  ways: /\b(waypoints?|way ?points?|markers?|pins?|arrow|tomtom|marked)\b/,
 });
 
 function newStore() {

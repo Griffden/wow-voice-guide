@@ -105,7 +105,7 @@ function parseFlags(flags) {
     else if (tok.startsWith('ann=')) {
       for (const pair of tok.slice(4).split(',')) {
         const [kind, on] = pair.split(':');
-        if (/^(quest|level|zone|bags|narrate)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
+        if (/^(quest|level|zone|bags|narrate|route)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
       }
     }
     else if (tok === 'v') out.voice = true;

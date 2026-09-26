@@ -49,6 +49,7 @@ The companion can never ask the game anything mid-answer: replies travel back th
 | `char` | game and client, character, hearthstone | login, `PLAYER_LEVEL_UP`, `HEARTHSTONE_BOUND` |
 | `prog` | money, XP, rested XP | XP, money and resting events (30 s debounce) |
 | `loc` | zone, subzone, map position | zone changes; moving 3 map units; every question |
+| `ways` | the map pin (`C_Map.GetUserWaypoint`, marked as set by the guide or the player) and the player's TomTom waypoints (`TomTom.waypoints`, the add-on's own left out) | `USER_WAYPOINT_UPDATED`; `hooksecurefunc` on `TomTom:AddWaypoint`/`RemoveWaypoint` |
 | `quest` | selected/tracked quest: status (`ReadyForTurnIn`), objectives, `GetNextWaypointText`, instructions, turn-in text, description | quest log and tracking events |
 | `quests` | every quest in the log with objective progress or "ready to turn in" | `QUEST_LOG_UPDATE` (4 s debounce), accept, remove, turn-in |
 | `npc` | NPC name, what they say, quests offered/active with IDs, dialog options | `GOSSIP_SHOW`, `QUEST_GREETING`, `QUEST_DETAIL`, `QUEST_PROGRESS`, `QUEST_COMPLETE` |
@@ -170,7 +171,7 @@ Deepgram Flux's `EagerEndOfTurn`/`TurnResumed` events (starting the model specul
 
 ## Announcements and quest narration
 
-The add-on reports a few moments in `a` records: a quest in the log becomes ready to turn in (`ReadyForTurnIn`, with `GetNextWaypointText`), `PLAYER_LEVEL_UP` (with the names of `C_SpellBook.GetCurrentLevelSpells`), `ZONE_CHANGED_NEW_AREA` to a new zone, free bag slots dropping to 2 or fewer, the most worn item dropping to 20 % durability or less, and `QUEST_ACCEPTED` (title, story text and objectives from the quest log). The first quest-log look after login and the login zone only set a baseline; bags and durability warn once until they recover. Nothing is sent while `InCombatLockdown()` or `UnitAffectingCombat("player")`: moments wait for `PLAYER_REGEN_ENABLED` and are dropped after a minute.
+The add-on reports a few moments in `a` records: a quest in the log becomes ready to turn in (`ReadyForTurnIn`, with `GetNextWaypointText`), `PLAYER_LEVEL_UP` (with the names of `C_SpellBook.GetCurrentLevelSpells`), `ZONE_CHANGED_NEW_AREA` to a new zone, free bag slots dropping to 2 or fewer, the most worn item dropping to 20 % durability or less, `QUEST_ACCEPTED` (title, story text and objectives from the quest log), and a route stop reached (stop number, its label, the next stop and its zone or dungeon). The first quest-log look after login and the login zone only set a baseline; bags and durability warn once until they recover. Nothing is sent while `InCombatLockdown()` or `UnitAffectingCombat("player")`: moments wait for `PLAYER_REGEN_ENABLED` and are dropped after a minute.
 
 `bridge/announce.js` speaks a moment only when its kind is switched on in `announce` (all off by default; `accept` uses `narrate`, `repair` uses `bags`). It builds one or two sentences without a model call, from the moment, the game state and the offline quest database (the quest giver when the client gives no next step; the zone briefing is `questdb.zoneSummary`). Each kind has a minimum interval, at most four wait in a queue, anything older than a minute is dropped, and announcements wait while the guide is answering or speaking. They play through the same Fish streaming path as answers.
 

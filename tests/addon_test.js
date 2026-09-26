@@ -704,6 +704,62 @@ test('with TomTom, a single waypoint gets the arrow and replaces only the previo
   assert.equal(vm.evaluate('TomTom.list[2].title'), 'Lakeshire');
 });
 
+test('the player\'s waypoints become a section: the map pin and their TomTom waypoints, not the guide\'s own', () => {
+  const vm = newVM();
+  vm.run('STUB.InstallTomTom(); TomTom:AddWaypoint(1453, 0.624, 0.718, { title = "Bank", from = "Player" })');
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  assert.equal(stateOnStrip(vm).sections.ways, 'TomTom waypoints (1): Bank (Duskwood 62.4, 71.8)');
+  deliverState(vm);
+  // TomTom sends no events; its add call marks the section.
+  vm.run('TomTom:AddWaypoint(1431, 0.5, 0.25, { title = "Rare spawn", from = "TomTom/way" }); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(stateOnStrip(vm).sections.ways, 'TomTom waypoints (2): Bank (Duskwood 62.4, 71.8); Rare spawn (Duskwood 50.0, 25.0)');
+  deliverState(vm);
+  // The guide's waypoint: the map pin says who set it, and our TomTom copy is left out.
+  vm.run('WoWClaude.SetWaypoint({ mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }); STUB.FireEvent("USER_WAYPOINT_UPDATED"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(vm.num('#TomTom.list'), 3);
+  assert.equal(stateOnStrip(vm).sections.ways,
+    'Map pin: Duskwood 45.2, 67.8 (set by the guide)\nTomTom waypoints (2): Bank (Duskwood 62.4, 71.8); Rare spawn (Duskwood 50.0, 25.0)');
+  deliverState(vm);
+  vm.run('STUB.waypoint = { mapId = 1431, x = 0.1, y = 0.2 }; STUB.FireEvent("USER_WAYPOINT_UPDATED"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.match(stateOnStrip(vm).sections.ways, /^Map pin: Duskwood 10\.0, 20\.0 \(set by the player\)\n/);
+});
+
+test('a route answer offers its stops as /way lines and announces each stop reached', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Route please")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three stops.",
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { instance = "Hall of Nowhere", label = "Ghost" }, { mapId = 1453, x = 0.634, y = 0.758, label = "General Marcus Jonathan" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('FindButton("^Copy /way") ~= nil'), 'true');
+  assert.equal(vm.evaluate('WoWClaude.WayLines(WoWClaudeDB.chats[1].history[2].waypoints)'),
+    '/way #1431 10.0 50.0 Alpha\n/way #1453 63.4 75.8 General Marcus Jonathan', 'a stop the map can\'t place is left out');
+  assert.equal(vm.evaluate('WoWClaude.WayLines({ { mapId = 1431, x = 0.452, y = 0.678 } })'), '/way #1431 45.2 67.8');
+  deliverState(vm);
+  vm.run('local b = FindButton("Start route"); b.scripts.OnClick(b)');
+  deliverState(vm);
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick(); STUB.posX, STUB.posY = nil, nil');
+  assert.deepEqual(announcements(vm).find(a => a.kind === 'route'), { kind: 'route', stop: '1', of: '3', label: 'Alpha', next: 'Ghost', zone: 'Hall of Nowhere' });
+  deliverState(vm);
+  vm.run('local b = FindButton("Next stop"); b.scripts.OnClick(b)');
+  vm.run('STUB.posX, STUB.posY = 0.634, 0.758; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.deepEqual(announcements(vm).find(a => a.kind === 'route'), { kind: 'route', stop: '3', of: '3', label: 'General Marcus Jonathan', next: '', zone: '' });
+  // Switched off in game: no more route moments.
+  vm.run('SlashCmdList.WOWCLAUDE("announce route off")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=route:0'));
+});
+
 test('/wow-claude bind assigns a window-independent Talk hotkey', () => {
   const vm = newVM();
   login(vm);
@@ -998,7 +1054,7 @@ test('announcements wait out combat, respect in-game switches, and follow the co
   vm.run('SlashCmdList.WOWCLAUDE("narrate on")');
   assert.ok(stripRecords(vm).some(r => r.flags === 'ann=narrate:1'));
   vm.run('SlashCmdList.WOWCLAUDE("announce all on")');
-  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1'));
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1,route:1'));
   // The companion's settings arrive with the next slot.
   nextSlot(vm, '{ now = time(), cwd = "", replies = {}, announce = { quest = true, level = false, zone = false, bags = false, narrate = false } }');
   vm.run('WoWClaude.Connect(); STUB.now = STUB.now + 6; STUB.Tick()');

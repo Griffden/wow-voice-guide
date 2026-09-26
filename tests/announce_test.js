@@ -32,10 +32,11 @@ function game() {
 test('the add-on flags parse: "a" moments and in-game switches; slot files carry the switches back', () => {
   assert.equal(P.parseFlags('a').announce, true);
   assert.deepEqual(P.parseFlags('ann=quest:1,zone:0,bogus:1').announceSet, { quest: true, zone: false });
+  assert.deepEqual(P.parseFlags('ann=route:1').announceSet, { route: true });
   assert.equal(P.parseFlags('').announceSet, undefined);
   const lua = P.luaTable('WoWClaude_SlotData', [], { now: 1000, announce: { quest: true, zone: false } });
   assert.match(lua, /\n\tannounce = \{ quest = true, zone = false \},\n/);
-  assert.deepEqual(A.settings({ announce: { quest: true, zone: 'yes' } }), { quest: true, level: false, zone: false, bags: false, narrate: false }, 'off unless switched on');
+  assert.deepEqual(A.settings({ announce: { quest: true, zone: 'yes' } }), { quest: true, level: false, zone: false, bags: false, narrate: false, route: false }, 'off unless switched on');
 });
 
 test('each moment becomes a short sentence from the game state and the quest database', () => {
@@ -52,6 +53,12 @@ test('each moment becomes a short sentence from the game state and the quest dat
   assert.equal(A.compose(A.fieldsOf(moment({ kind: 'repair', percent: '12', slot: 'Chest' }))), 'Your gear needs repair: chest is at 12% durability.');
   assert.equal(A.compose(A.fieldsOf(moment({ kind: 'accept', title: 'Westfall Stew', text: 'Salma needs meat.', objectives: 'Bring 3 Stringy Vulture Meat' }))),
     'Westfall Stew. Salma needs meat. Bring 3 Stringy Vulture Meat.');
+  assert.equal(A.compose(A.fieldsOf(moment({ kind: 'route', stop: '1', of: '3', label: 'Earthseer Farsen', next: 'Thom Filch', zone: 'Stormwind City' }))),
+    'Reached Earthseer Farsen. Next, Thom Filch in Stormwind City.');
+  assert.equal(A.compose(A.fieldsOf(moment({ kind: 'route', stop: '2', of: '3', label: 'Thom Filch', next: 'Ruins of Lordaeron', zone: 'Ruins of Lordaeron' }))),
+    'Reached Thom Filch. Next, Ruins of Lordaeron.', 'a dungeon stop is not "in" itself');
+  assert.equal(A.compose(A.fieldsOf(moment({ kind: 'route', stop: '3', of: '3', label: 'General Marcus Jonathan', next: '', zone: '' }))),
+    'Reached General Marcus Jonathan. Route complete.');
 });
 
 test('the announcer speaks only switched-on kinds, rate limits, waits for the guide, and speaks in order', async () => {

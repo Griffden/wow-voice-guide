@@ -77,9 +77,9 @@ S.Fit = Fit
 -- so a section never needs more than one state record.
 S.BUDGET = {
 	char = 400, prog = 200, loc = 250, quest = 1100, quests = 1200, npc = 1000,
-	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900,
+	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900, ways = 400,
 }
-S.ORDER = { "char", "prog", "loc", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
+S.ORDER = { "char", "prog", "loc", "ways", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
 
 local function Money(copper)
 	copper = tonumber(copper) or 0
@@ -613,6 +613,50 @@ function S.Taxi(known)
 	table.sort(names)
 	local line = "Known flight paths (" .. #names .. "): " .. table.concat(names, "; ")
 	return Clean(line, S.BUDGET.taxi)
+end
+
+---------------------------------------------------------------------------
+-- Waypoints: the game's map pin and the player's TomTom waypoints
+---------------------------------------------------------------------------
+
+local function MapName(mapId)
+	local info = Try(C_Map and C_Map.GetMapInfo, mapId)
+	return type(info) == "table" and type(info.name) == "string" and info.name or ("map " .. tostring(mapId))
+end
+
+local function Spot(mapId, x, y)
+	return string.format("%s %.1f, %.1f", MapName(mapId), x * 100, y * 100)
+end
+
+-- ours: the tag on TomTom waypoints the add-on added (left out; the guide
+-- knows its own answers). guidePin: the last map pin the guide set, so the
+-- player can tell it from one they placed.
+function S.Waypoints(ours, guidePin)
+	local lines = {}
+	local pin = Try(C_Map and C_Map.GetUserWaypoint)
+	if type(pin) == "table" and type(pin.uiMapID) == "number" and type(pin.position) == "table"
+		and type(pin.position.x) == "number" and type(pin.position.y) == "number" then
+		local p = pin.position
+		local fromGuide = type(guidePin) == "table" and guidePin.mapId == pin.uiMapID
+			and math.abs((guidePin.x or -1) - p.x) < 0.001 and math.abs((guidePin.y or -1) - p.y) < 0.001
+		table.insert(lines, "Map pin: " .. Spot(pin.uiMapID, p.x, p.y) .. (fromGuide and " (set by the guide)" or " (set by the player)"))
+	end
+	local all = type(TomTom) == "table" and type(TomTom.waypoints) == "table" and TomTom.waypoints
+	local list = {}
+	for mapId, byKey in pairs(all or {}) do
+		if type(byKey) == "table" then
+			for _, w in pairs(byKey) do
+				if type(w) == "table" and w.from ~= ours and type(w[2]) == "number" and type(w[3]) == "number" then
+					local m = type(w[1]) == "number" and w[1] or mapId
+					local title = type(w.title) == "string" and w.title ~= "" and Clean(w.title, 50) or "untitled"
+					table.insert(list, title .. " (" .. Spot(m, w[2], w[3]) .. ")")
+				end
+			end
+		end
+	end
+	table.sort(list)
+	if #list > 0 then table.insert(lines, Clean("TomTom waypoints (" .. #list .. "): " .. table.concat(list, "; "), S.BUDGET.ways)) end
+	return Fit(lines, S.BUDGET.ways)
 end
 
 ---------------------------------------------------------------------------

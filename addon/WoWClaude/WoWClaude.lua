@@ -49,6 +49,7 @@ local db
 local ui = {}
 -- Transport state for this UI session. outbound[id] = { chat, cwd, flags, text, sentAt, acked }
 local run = { outbound = {} }
+local TOMTOM_FROM = "WoWClaude" -- the tag on TomTom waypoints this add-on added
 
 -- Shared window backdrop. Declared up here because ShowCopy (rendering section)
 -- uses it too: a later `local` would be invisible there and resolve to a nil global.
@@ -999,6 +1000,7 @@ local function BuildSection(key, out)
 	elseif key == "talents" then out.talents = State.Talents()
 	elseif key == "prof" then out.prof = State.Professions()
 	elseif key == "taxi" then out.taxi = State.Taxi(db and db.taxi)
+	elseif key == "ways" then out.ways = State.Waypoints(TOMTOM_FROM, run.guidePin)
 	elseif key == "gear" then out.gear = State.Gear()
 	elseif key == "done" then
 		local ids = State.CompletedIds()
@@ -1021,7 +1023,7 @@ end
 -- reload-mode outbox (which has no room for separate section records).
 function WoWClaude.GameContext()
 	local out = {}
-	for _, key in ipairs({ "char", "prog", "loc", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do Guarded("state." .. key, BuildSection, key, out) end
+	for _, key in ipairs({ "char", "prog", "loc", "ways", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do Guarded("state." .. key, BuildSection, key, out) end
 	local lines = {}
 	for _, key in ipairs(State.ORDER) do
 		if out[key] and out[key] ~= "" then table.insert(lines, out[key]) end
@@ -1118,7 +1120,7 @@ function WoWClaude.SendFullState()
 	local st = StateRun()
 	st.sent = {}
 	st.full = true
-	local keys = { "char", "prog", "loc", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done" }
+	local keys = { "char", "prog", "loc", "ways", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done" }
 	for _, key in ipairs(keys) do st.dirty[key] = GetTime() end
 	WoWClaude.FlushState(true)
 end
@@ -1174,6 +1176,7 @@ local STATE_EVENTS = {
 	PLAYER_EQUIPMENT_CHANGED = { "gear" },
 	UPDATE_INVENTORY_DURABILITY = { "gear" },
 	BAG_UPDATE_DELAYED = { "gear" },
+	USER_WAYPOINT_UPDATED = { "ways" },
 }
 local DIALOG_EVENTS = { GOSSIP_SHOW = true, QUEST_DETAIL = true, QUEST_GREETING = true, QUEST_PROGRESS = true, QUEST_COMPLETE = true }
 
@@ -1235,7 +1238,7 @@ end
 -- (ApplyAnnounceSettings). Nothing is sent in combat: moments that happen
 -- then wait for PLAYER_REGEN_ENABLED and are dropped after a minute.
 
-local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate" }
+local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate", "route" }
 local ANNOUNCE_STALE = 60
 local BAGS_LOW, BAGS_OK = 2, 5 -- free slots: warn at 2 or fewer, again after 5 or more
 local WORN_LOW, WORN_OK = 20, 50 -- durability percent: warn at 20 or less, again after 50
@@ -1260,7 +1263,7 @@ local function SendAnnouncement(fields)
 	RefreshStrip()
 end
 
--- kind: quest | level | zone | bags | repair | accept; fields: { { key, value }, ... }
+-- kind: quest | level | zone | bags | repair | accept | route; fields: { { key, value }, ... }
 function WoWClaude.Announce(kind, fields)
 	if not db or db.settings.mode ~= "pixel" then return end
 	local a = db.settings.announce
@@ -1383,13 +1386,13 @@ function WoWClaude.AnnounceCommand(cmd, rest)
 		run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "ann=" .. table.concat(changed, ","), name = c and c.name or "", text = "", sentAt = GetTime(), stateRec = true }
 		RefreshStrip()
 	end
-	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud" }
+	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud", route = "route stop reached and where next" }
 	local lines = { "Spoken announcements (off unless turned on here or in the companion's Settings; never in combat):" }
 	for _, k in ipairs(ANNOUNCE_KINDS) do
 		local state = a[k] == true and "on" or a[k] == false and "off" or "as set in the companion"
 		table.insert(lines, "  " .. k .. " - " .. names[k] .. ": " .. state)
 	end
-	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
+	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|route|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
 	AddHistory(c, "system", table.concat(lines, "\n"))
 	WoWClaude.Render()
 	WoWClaude.Toggle(true)
@@ -1481,10 +1484,9 @@ end
 -- TomTom (when installed): more waypoints, its arrow, arrival callbacks
 ---------------------------------------------------------------------------
 
--- Ours carry from = "WoWClaude", so the player's own are never removed. A
+-- Ours carry from = TOMTOM_FROM, so the player's own are never removed. A
 -- route's stops have TomTom's clear-on-arrival off: the route removes them
 -- itself, and walking past a later stop must not delete it.
-local TOMTOM_FROM = "WoWClaude"
 local ROUTE_ARRIVE_YARDS = 25
 local ROUTE_ARRIVE_MAP = 0.012 -- the same, in map units, when world positions are unavailable
 
@@ -1530,6 +1532,15 @@ end
 
 -- A one-off answer's waypoint replaces the previous one of ours and gets the
 -- arrow; TomTom clears it on arrival as it does its own.
+-- TomTom sends no events: its add and remove calls mark the waypoint section.
+function WoWClaude.HookTomTom()
+	if run.tomtomHooked or not TomTomReady() or not hooksecurefunc then return end
+	run.tomtomHooked = true
+	local function changed() WoWClaude.MarkState("ways") end
+	pcall(hooksecurefunc, TomTom, "AddWaypoint", changed)
+	if TomTom.RemoveWaypoint then pcall(hooksecurefunc, TomTom, "RemoveWaypoint", changed) end
+end
+
 local function TomTomSingle(point)
 	TomTomRemove(run.single)
 	run.single = TomTomAdd(point, point.label or "WoW Voice Guide")
@@ -1558,6 +1569,7 @@ function WoWClaude.SetWaypoint(point, quiet)
 		return
 	end
 	local set = pcall(C_Map.SetUserWaypoint, mapPoint)
+	if set then run.guidePin = { mapId = point.mapId, x = point.x, y = point.y } end
 	if set and C_SuperTrack and C_SuperTrack.SetSuperTrackedUserWaypoint then
 		pcall(C_SuperTrack.SetSuperTrackedUserWaypoint, true)
 	end
@@ -1590,7 +1602,15 @@ end
 
 local function ReachedStop(route)
 	local stop = route.points[route.i]
-	print("WoW Voice Guide: reached " .. tostring(stop.label or stop.instance or "the stop") .. ".")
+	local label = tostring(stop.label or stop.instance or "the stop")
+	print("WoW Voice Guide: reached " .. label .. ".")
+	-- Spoken, when the player turned route announcements on: where next.
+	local nextStop = route.points[route.i + 1]
+	local nextPoint = nextStop and MapPoint(nextStop)
+	local info = nextPoint and Try(C_Map.GetMapInfo, nextPoint.mapId)
+	WoWClaude.Announce("route", { { "stop", route.i }, { "of", #route.points }, { "label", label },
+		{ "next", nextStop and (nextStop.label or nextStop.instance) or "" },
+		{ "zone", nextStop and (nextStop.instance or (type(info) == "table" and info.name)) or "" } })
 	WoWClaude.NextStop()
 end
 
@@ -2335,6 +2355,20 @@ local function GetBubble(i)
 	return b
 end
 
+-- The stops as TomTom /way lines (other waypoint add-ons read them too), one
+-- per line; a dungeon stop is its entrance, one the map doesn't show is left out.
+local function WayLines(stops)
+	local lines = {}
+	for _, stop in ipairs(stops) do
+		local p = MapPoint(stop)
+		if p and type(p.x) == "number" and type(p.y) == "number" then
+			table.insert(lines, (string.format("/way #%d %.1f %.1f %s", p.mapId, p.x * 100, p.y * 100, tostring(p.label or "")):gsub("%s+$", "")))
+		end
+	end
+	return table.concat(lines, "\n")
+end
+WoWClaude.WayLines = WayLines
+
 -- The buttons under a guide answer: its route (or single waypoint) and the
 -- items it named, as { text, onClick, onEnter, newRow }.
 local function MessageActions(m)
@@ -2359,6 +2393,8 @@ local function MessageActions(m)
 		local label = (m.waypoint.label and m.waypoint.label ~= "") and (": " .. Display(m.waypoint.label)) or ""
 		table.insert(list, { text = "Set waypoint" .. label, onClick = function() WoWClaude.SetWaypoint(m.waypoint) end })
 	end
+	local ways = WayLines(stops or (type(m.waypoint) == "table" and { m.waypoint }) or {})
+	if ways ~= "" then table.insert(list, { text = "Copy /way", onClick = function() WoWClaude.ShowCopy(ways) end }) end
 	local first = true
 	for _, item in ipairs(type(m.items) == "table" and m.items or {}) do
 		if type(item) == "table" and type(item.id) == "number" then
@@ -3723,6 +3759,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		BuildUI()
 		run = { outbound = {} }
 		run.lastZone = Try(GetZoneText) -- the zone we log in to is not announced
+		WoWClaude.HookTomTom()
 		SelfTestSignals()
 		ProcessInbox()
 		if AnyPending() then

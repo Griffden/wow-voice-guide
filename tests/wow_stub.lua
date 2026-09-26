@@ -223,6 +223,11 @@ C_Map = {
 	GetPlayerMapPosition = function(mapId, unit) return { x = STUB.posX or 0.452, y = STUB.posY or 0.678 } end,
 	GetMapInfo = function(mapId) return { name = "Duskwood", mapID = mapId } end,
 	SetUserWaypoint = function(point) STUB.waypoint = point end,
+	-- The real one returns a new UiMapPoint: uiMapID and a position vector.
+	GetUserWaypoint = function()
+		local w = STUB.waypoint
+		if w then return { uiMapID = w.mapId, position = { x = w.x, y = w.y } } end
+	end,
 	GetMapChildrenInfo = function(mapId, mapType, all)
 		if mapId == 1415 then return { { mapID = 1458, name = "Undercity" }, { mapID = 1420, name = "Tirisfal Glades" } } end
 		return {}

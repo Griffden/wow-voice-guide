@@ -1,7 +1,7 @@
 'use strict';
 // Opt-in spoken announcements: the add-on reports a moment (an "a" record:
 // quest objectives done, level up, new zone, bags nearly full, gear about to
-// break, quest accepted) and, when the player switched that kind on, the
+// break, quest accepted, route stop reached) and, when the player switched that kind on, the
 // companion says one or two sentences about it in the selected Fish voice.
 //
 // The sentences are built here from the moment, the game state and the
@@ -13,9 +13,9 @@
 const GameState = require('./gamestate');
 const QuestDB = require('./questdb');
 
-const KINDS = Object.freeze(['quest', 'level', 'zone', 'bags', 'narrate']);
+const KINDS = Object.freeze(['quest', 'level', 'zone', 'bags', 'narrate', 'route']);
 // Minimum time between two announcements of the same moment kind.
-const MIN_INTERVAL_MS = Object.freeze({ quest: 10000, level: 0, zone: 90000, bags: 300000, repair: 300000, accept: 0 });
+const MIN_INTERVAL_MS = Object.freeze({ quest: 10000, level: 0, zone: 90000, bags: 300000, repair: 300000, accept: 0, route: 0 });
 const STALE_MS = 60000;
 const QUEUE_MAX = 4;
 
@@ -89,6 +89,11 @@ function compose(fields, { game } = {}) {
   }
   if (kind === 'repair') {
     return `Your gear needs repair: ${String(fields.slot || 'an item').toLowerCase()} is at ${fields.percent}% durability.`;
+  }
+  if (kind === 'route') {
+    const reached = `Reached ${fields.label || 'the stop'}.`;
+    if (!fields.next) return `${reached} Route complete.`;
+    return `${reached} Next, ${fields.next}${fields.zone && fields.zone !== fields.next ? ` in ${fields.zone}` : ''}.`;
   }
   if (kind === 'accept') {
     const parts = [sentence(fields.title), fields.text, fields.objectives ? sentence(fields.objectives) : ''].filter(Boolean);
