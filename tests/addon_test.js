@@ -634,6 +634,76 @@ test('a stop inside a dungeon is set on the entrance the world map shows, and en
   assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /Ruins of Lordaeron entrance: map 1420 at 62\.0, 73\.0/);
 });
 
+test('with TomTom, a route puts every stop on the map, the arrow follows the current stop and arrival moves it on', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.InstallTomTom()
+    -- The player's own waypoint where stop 1 goes: left alone.
+    Mine = TomTom:AddWaypoint(1431, 0.1, 0.5, { title = "1. Alpha", from = "Player" })
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end
+    function Click(pattern) local b = FindButton(pattern); b.scripts.OnClick(b) end
+    function Titles() local t = {} for _, w in ipairs(TomTom.list) do table.insert(t, w.title .. "@" .. w.from) end return table.concat(t, ",") end`);
+  vm.run('WoWClaude.Send("Route please")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Four stops.",
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { mapId = 1431, x = 0.2, y = 0.5, label = "Bravo" },
+      { instance = "Hall of Nowhere", label = "Ghost" }, { mapId = 1431, x = 0.3, y = 0.5, label = "Charlie" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  vm.run('Click("Start route")');
+  // Stop 1 is the player's own; the dungeon stop can't be placed; the rest keep their stop numbers.
+  assert.equal(vm.evaluate('Titles()'), '1. Alpha@Player,2. Bravo@WoWClaude,4. Charlie@WoWClaude');
+  assert.equal(vm.evaluate('TomTom.list[2].cleardistance'), '0', 'TomTom does not clear a stop the route still needs');
+  assert.equal(vm.evaluate('TomTom.list[2].persistent'), 'false');
+  assert.equal(vm.evaluate('TomTom.list[2].crazy'), 'false');
+  // A later stop passed on the way does nothing.
+  vm.run('STUB.TomTomDistance(TomTom.list[3], 20)');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.1');
+  // Arriving at stop 1 by the tick moves on; the arrow now points at Bravo.
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick(); STUB.posX, STUB.posY = nil, nil');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), '2. Bravo');
+  // TomTom's arrival callback for the current stop moves on too; its own ping still runs.
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 12)');
+  assert.equal(vm.num('STUB.tomtomPings'), 1);
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2', 'inside the ping circle only, not a new arrival');
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 22)');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints - 1]').includes('reached Bravo'));
+  // Stop 3 can't be placed; Next stop goes on to Charlie.
+  vm.run('Click("Next stop")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), '4. Charlie');
+  // A stale callback for a stop already passed does nothing.
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 20)');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  // Finishing removes our stops and keeps the player's.
+  vm.run('Click("Finish route")');
+  assert.equal(vm.evaluate('Titles()'), '1. Alpha@Player');
+});
+
+test('with TomTom, a single waypoint gets the arrow and replaces only the previous one of ours', () => {
+  const vm = newVM();
+  login(vm);
+  vm.run(`STUB.InstallTomTom()
+    TomTom:AddWaypoint(1453, 0.5, 0.5, { title = "Bank", from = "Player" })
+    WoWClaude.SetWaypoint({ mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" })`);
+  assert.equal(vm.num('#TomTom.list'), 2);
+  assert.equal(vm.evaluate('TomTom.list[2].from'), 'WoWClaude');
+  assert.equal(vm.evaluate('TomTom.list[2].cleardistance'), null, 'TomTom clears it on arrival as usual');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), 'Darkshire');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1431', 'the game waypoint is still set');
+  vm.run('WoWClaude.SetWaypoint({ mapId = 1433, x = 0.3, y = 0.6, label = "Lakeshire" })');
+  assert.equal(vm.num('#TomTom.list'), 2);
+  assert.equal(vm.evaluate('TomTom.list[1].title'), 'Bank');
+  assert.equal(vm.evaluate('TomTom.list[2].title'), 'Lakeshire');
+});
+
 test('/wow-claude bind assigns a window-independent Talk hotkey', () => {
   const vm = newVM();
   login(vm);

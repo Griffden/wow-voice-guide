@@ -1477,6 +1477,65 @@ local function InsideStopDungeon(point)
 	return type(name) == "string" and DungeonKey(name) == DungeonKey(point.instance)
 end
 
+---------------------------------------------------------------------------
+-- TomTom (when installed): more waypoints, its arrow, arrival callbacks
+---------------------------------------------------------------------------
+
+-- Ours carry from = "WoWClaude", so the player's own are never removed. A
+-- route's stops have TomTom's clear-on-arrival off: the route removes them
+-- itself, and walking past a later stop must not delete it.
+local TOMTOM_FROM = "WoWClaude"
+local ROUTE_ARRIVE_YARDS = 25
+local ROUTE_ARRIVE_MAP = 0.012 -- the same, in map units, when world positions are unavailable
+
+local function TomTomReady()
+	return type(TomTom) == "table" and type(TomTom.AddWaypoint) == "function"
+end
+
+-- A TomTom waypoint at a map point, or nil when TomTom is missing or the
+-- player already has one there (theirs, so left alone). onArrive(uid) runs
+-- within ROUTE_ARRIVE_YARDS, and makes the waypoint stay until removed.
+local function TomTomAdd(p, title, onArrive)
+	if not TomTomReady() then return nil end
+	if TomTom.WaypointExists then
+		local ok, exists = pcall(TomTom.WaypointExists, TomTom, p.mapId, p.x, p.y, title)
+		if ok and exists then return nil end
+	end
+	local opts = { title = title, from = TOMTOM_FROM, persistent = false, crazy = false, silent = true }
+	if onArrive then
+		opts.cleardistance = 0
+		-- TomTom's own callbacks keep its tooltips, clicks and arrival ping.
+		local ok, callbacks = pcall(TomTom.DefaultCallbacks, TomTom, opts)
+		if ok and type(callbacks) == "table" then
+			callbacks.distance = callbacks.distance or {}
+			local theirs = callbacks.distance[ROUTE_ARRIVE_YARDS]
+			callbacks.distance[ROUTE_ARRIVE_YARDS] = function(event, uid, range, distance, lastdistance)
+				if theirs then pcall(theirs, event, uid, range, distance, lastdistance) end
+				if type(distance) == "number" and distance <= range then onArrive(uid) end
+			end
+			opts.callbacks = callbacks
+		end
+	end
+	local ok, uid = pcall(TomTom.AddWaypoint, TomTom, p.mapId, p.x, p.y, opts)
+	return ok and uid or nil
+end
+
+local function TomTomRemove(uid)
+	if uid and TomTomReady() and TomTom.RemoveWaypoint then pcall(TomTom.RemoveWaypoint, TomTom, uid) end
+end
+
+local function TomTomArrow(uid, title)
+	if uid and TomTomReady() and TomTom.SetCrazyArrow then pcall(TomTom.SetCrazyArrow, TomTom, uid, ROUTE_ARRIVE_YARDS, title) end
+end
+
+-- A one-off answer's waypoint replaces the previous one of ours and gets the
+-- arrow; TomTom clears it on arrival as it does its own.
+local function TomTomSingle(point)
+	TomTomRemove(run.single)
+	run.single = TomTomAdd(point, point.label or "WoW Voice Guide")
+	TomTomArrow(run.single, point.label)
+end
+
 -- quiet: the caller prints its own line (a route stop).
 function WoWClaude.SetWaypoint(point, quiet)
 	if type(point) == "table" and point.instance and not point.mapId then
@@ -1488,6 +1547,7 @@ function WoWClaude.SetWaypoint(point, quiet)
 		point = resolved
 	end
 	if type(point) ~= "table" or type(point.mapId) ~= "number" or type(point.x) ~= "number" or type(point.y) ~= "number" then return end
+	if not quiet then TomTomSingle(point) end
 	if not (C_Map and C_Map.SetUserWaypoint and UiMapPoint and UiMapPoint.CreateFromCoordinates) then
 		print("WoW Voice Guide: this client does not expose user waypoints.")
 		return
@@ -1512,18 +1572,39 @@ end
 -- The game keeps a single user waypoint, so a route sets its stops in turn:
 -- arriving near one (checked on the tick) moves the waypoint to the next,
 -- and the answer's "Next stop" button skips ahead. With TomTom installed,
--- every stop is also put on the map at once.
-local ROUTE_ARRIVE_YARDS = 25
-local ROUTE_ARRIVE_MAP = 0.012 -- the same, in map units, when world positions are unavailable
+-- every stop is also put on the map at once, its arrow follows the current
+-- stop, and TomTom's arrival callback moves the route on (the tick check
+-- stays for players without it and for entering a dungeon).
 
 local function RouteStopLine(route)
 	local p = MapPoint(route.points[route.i]) or route.points[route.i]
 	return "stop " .. route.i .. " of " .. #route.points .. ": " .. tostring(p.label or "destination")
 end
 
+-- route.tomtom is keyed by stop number: a stop that can't be placed has none.
 local function ClearTomTom(route)
-	if not (route and route.tomtom and TomTom and TomTom.RemoveWaypoint) then return end
-	for _, uid in ipairs(route.tomtom) do pcall(TomTom.RemoveWaypoint, TomTom, uid) end
+	if not (route and route.tomtom) then return end
+	for _, uid in pairs(route.tomtom) do TomTomRemove(uid) end
+	route.tomtom = nil
+end
+
+local function ReachedStop(route)
+	local stop = route.points[route.i]
+	print("WoW Voice Guide: reached " .. tostring(stop.label or stop.instance or "the stop") .. ".")
+	WoWClaude.NextStop()
+end
+
+-- Only the current stop's waypoint counts; a later stop passed on the way,
+-- or one the tick already moved past, does nothing.
+local function TomTomArrived(uid)
+	local route = run.route
+	if route and route.tomtom and route.tomtom[route.i] == uid then ReachedStop(route) end
+end
+
+local function ShowStop(route)
+	if WoWClaude.SetWaypoint(route.points[route.i], true) then print("WoW Voice Guide route, " .. RouteStopLine(route)) end
+	local uid = route.tomtom and route.tomtom[route.i]
+	if uid then TomTomArrow(uid, uid.title) end
 end
 
 -- points: the stops in order; startAt: the stop to go to first; msg: the
@@ -1534,18 +1615,17 @@ function WoWClaude.StartRoute(points, startAt, msg)
 	if previous and previous.msg ~= msg then ClearTomTom(previous) end
 	local route = { points = points, i = math.max(1, math.min(startAt or 1, #points)), msg = msg }
 	if previous and previous.msg == msg then route.tomtom = previous.tomtom end
-	if not route.tomtom and TomTom and TomTom.AddWaypoint then
+	TomTomRemove(run.single)
+	run.single = nil
+	if not route.tomtom and TomTomReady() then
 		route.tomtom = {}
 		for k, stop in ipairs(points) do
 			local p = MapPoint(stop)
-			if p then
-				local ok, uid = pcall(TomTom.AddWaypoint, TomTom, p.mapId, p.x, p.y, { title = k .. ". " .. tostring(p.label or ""), persistent = false })
-				if ok and uid then table.insert(route.tomtom, uid) end
-			end
+			if p then route.tomtom[k] = TomTomAdd(p, k .. ". " .. tostring(p.label or ""), TomTomArrived) end
 		end
 	end
 	run.route = route
-	if WoWClaude.SetWaypoint(points[route.i], true) then print("WoW Voice Guide route, " .. RouteStopLine(route)) end
+	ShowStop(route)
 	WoWClaude.Render()
 end
 
@@ -1560,7 +1640,7 @@ function WoWClaude.NextStop()
 		return
 	end
 	route.i = route.i + 1
-	if WoWClaude.SetWaypoint(route.points[route.i], true) then print("WoW Voice Guide route, " .. RouteStopLine(route)) end
+	ShowStop(route)
 	WoWClaude.Render()
 end
 
@@ -1595,10 +1675,7 @@ function WoWClaude.CheckRoute()
 	local target = MapPoint(stop)
 	if not target then return end
 	local d, unit = DistanceTo(target)
-	if d and d <= (unit == "yards" and ROUTE_ARRIVE_YARDS or ROUTE_ARRIVE_MAP) then
-		print("WoW Voice Guide: reached " .. tostring(route.points[route.i].label or "the stop") .. ".")
-		WoWClaude.NextStop()
-	end
+	if d and d <= (unit == "yards" and ROUTE_ARRIVE_YARDS or ROUTE_ARRIVE_MAP) then ReachedStop(route) end
 end
 
 ---------------------------------------------------------------------------

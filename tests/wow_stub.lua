@@ -372,3 +372,45 @@ function print(...)
 	for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
 	table.insert(STUB.prints, table.concat(parts, " "))
 end
+
+-- TomTom as far as the add-on uses it (v4.3 API): not installed until a test
+-- calls STUB.InstallTomTom(). TomTom.list holds the waypoints in order.
+function STUB.InstallTomTom()
+	local tt = { list = {}, waypoints = {} }
+	function tt:WaypointExists(m, x, y, title)
+		for _, w in ipairs(self.list) do
+			if w[1] == m and w[2] == x and w[3] == y and w.title == title then return true end
+		end
+		return false
+	end
+	function tt:DefaultCallbacks(opts)
+		return { minimap = {}, world = {}, distance = { [15] = function() STUB.tomtomPings = (STUB.tomtomPings or 0) + 1 end } }
+	end
+	function tt:AddWaypoint(m, x, y, opts)
+		local uid = { m, x, y, title = opts.title, from = opts.from or "?" }
+		for k, v in pairs(opts) do if uid[k] == nil then uid[k] = v end end
+		table.insert(self.list, uid)
+		self.waypoints[m] = self.waypoints[m] or {}
+		self.waypoints[m][tostring(uid)] = uid
+		return uid
+	end
+	function tt:RemoveWaypoint(uid)
+		for i, w in ipairs(self.list) do if w == uid then table.remove(self.list, i) break end end
+		if self.waypoints[uid[1]] then self.waypoints[uid[1]][tostring(uid)] = nil end
+		if self.arrow == uid then self.arrow = nil end
+	end
+	function tt:SetCrazyArrow(uid, dist, title) self.arrow, self.arrowTitle = uid, title end
+	TomTom = tt
+	return tt
+end
+
+-- The player comes within `yards` of a TomTom waypoint: like TomTom, the
+-- callback of the smallest circle they are inside runs.
+function STUB.TomTomDistance(uid, yards)
+	local circles = uid.callbacks and uid.callbacks.distance or {}
+	local best
+	for range in pairs(circles) do
+		if yards <= range and (not best or range < best) then best = range end
+	end
+	if best then circles[best]("distance", uid, best, yards, nil) end
+end
