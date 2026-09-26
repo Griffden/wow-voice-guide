@@ -634,6 +634,32 @@ test('a stop inside a dungeon is set on the entrance the world map shows, and en
   assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /Ruins of Lordaeron entrance: map 1420 at 62\.0, 73\.0/);
 });
 
+test('stops known only by name: a dungeon the world map knows becomes its entrance, a town is left out', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.entrances[1420] = { { "Ruins of Lordaeron", 0.62, 0.73 } }
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Take me to the Ruins of Lordaeron")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three travel stops.",
+    waypoint = { place = "Tarren Mill", label = "Tarren Mill" },
+    waypoints = { { place = "Tarren Mill", label = "Tarren Mill" }, { place = "Silverpine Forest", label = "Silverpine Forest" }, { place = "Ruins of Lordaeron", label = "Ruins of Lordaeron" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  // One stop is left: no route, a single waypoint on the entrance.
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoints'), null);
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoint.instance'), 'Ruins of Lordaeron');
+  vm.run('local b = FindButton("^Set waypoint"); b.scripts.OnClick(b)');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1420');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.62');
+});
+
 test('with TomTom, a route puts every stop on the map, the arrow follows the current stop and arrival moves it on', () => {
   const vm = newVM();
   login(vm);

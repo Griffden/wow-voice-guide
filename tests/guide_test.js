@@ -222,7 +222,8 @@ test('stops the model only web-searched are placed by their NPC name: quest data
     assert.deepEqual(answer.waypoints, [
       { mapId: 1453, x: 0.563, y: 0.54, label: 'Orphan Matron Nightingale' },
       { mapId: 1455, x: 0.326, y: 0.446, label: 'Thom Filch' },
-    ]);
+      { place: 'Nobody Of That Name', label: 'Nobody Of That Name' },
+    ], 'a name found nowhere goes by name: the add-on keeps it only for a dungeon it knows');
     assert.match(answer.display, /3\. Enter the dungeon$/, 'an unknown name stays words only');
   } finally { net.restore(); }
 });
@@ -240,6 +241,24 @@ test('a stop inside a dungeon goes to the add-on as the dungeon name, for its en
       { mapId: 1453, x: 0.563, y: 0.54, label: 'Orphan Matron Nightingale' },
     ]);
     assert.match(answer.display, /1\. Speak with Captain Truman inside for Abominable Creatures - inside Ruins of Lordaeron \(waypoint at the entrance\)\n/);
+  } finally { net.restore(); }
+});
+
+test('travel legs named only by place go to the add-on by name, and a dungeon entered gets its entrance', async () => {
+  const net = fakeNetwork([say({ basis: 'forever', speech: 'Three travel stops.', steps: [
+    { do: 'Walk north from Southshore toward Tarren Mill', label: 'Tarren Mill', where: 'Hillsbrad Foothills, north of Southshore' },
+    { do: 'Head to the ruins above Undercity and enter the dungeon', label: 'Ruins of Lordaeron', where: 'Tirisfal Glades, in the ruins above Undercity' },
+  ] })]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Take me to the Ruins of Lordaeron' });
+    assert.match(net.requests[0].instructions, /or a step that enters one, set "instance"/);
+    assert.deepEqual(answer.waypoints, [
+      { place: 'Tarren Mill', label: 'Tarren Mill' },
+      { place: 'Ruins of Lordaeron', label: 'Ruins of Lordaeron' },
+    ]);
+    assert.match(answer.display, /1\. Walk north from Southshore toward Tarren Mill - Hillsbrad Foothills, north of Southshore\n2\. /, 'no made-up area or coordinates');
+    const lua = require('../bridge/protocol').luaTable('WoWClaude_SlotData', [{ chat: 'c', id: 1, status: 'done', text: 't', waypoint: answer.waypoint, waypoints: answer.waypoints }], { now: 1 });
+    assert.ok(lua.includes('waypoints = { { place = "Tarren Mill", label = "Tarren Mill" }, { place = "Ruins of Lordaeron", label = "Ruins of Lordaeron" } },'));
   } finally { net.restore(); }
 });
 

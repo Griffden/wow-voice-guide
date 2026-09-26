@@ -687,6 +687,21 @@ local function MarkAcked(id)
 end
 
 -- Dispatch a list of reply records to the chats waiting for them.
+-- Stops the guide could only name ({ place = name }): a dungeon the world map
+-- knows becomes that dungeon's stop, waypoint on its entrance; anything else
+-- (a town, a zone) is left out.
+local function ResolvePlaces(points)
+	local out = {}
+	for _, p in ipairs(type(points) == "table" and points or {}) do
+		if type(p) == "table" and type(p.place) == "string" then
+			if WoWClaude.DungeonEntrance(p.place) then table.insert(out, { instance = p.place, label = p.label }) end
+		elseif type(p) == "table" then
+			table.insert(out, p)
+		end
+	end
+	return out
+end
+
 local function ApplyReplies(replies)
 	local matched = false
 	for _, r in ipairs(replies or {}) do
@@ -709,8 +724,9 @@ local function ApplyReplies(replies)
 					run.portraitUntil = GetTime() + math.max(2, remaining)
 					run.talking = true
 				end
-				Finish(c, "claude", r.text or "", denied, r.waypoint, {
-					waypoints = type(r.waypoints) == "table" and #r.waypoints > 1 and r.waypoints or nil,
+				local stops = ResolvePlaces(r.waypoints)
+				Finish(c, "claude", r.text or "", denied, ResolvePlaces({ r.waypoint })[1] or stops[1], {
+					waypoints = #stops > 1 and stops or nil,
 					items = type(r.items) == "table" and #r.items > 0 and r.items or nil,
 				})
 			elseif r.status == "error" then

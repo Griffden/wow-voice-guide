@@ -269,8 +269,11 @@ function luaTable(globalName, records, opts = {}) {
     if (r.transcript) lines.push(`\t\t\ttranscript = ${luaStr(r.transcript)},`);
     if (Number.isFinite(r.speechEndsAt) && r.speechEndsAt > 0) lines.push(`\t\t\tspeechEndsAt = ${r.speechEndsAt},`);
     // A stop inside a dungeon carries its name; the add-on finds the entrance.
+    // A place is a stop known only by name: the add-on keeps it if the world
+    // map knows a dungeon of that name.
     const point = p => p.instance
       ? `{ instance = ${luaStr(p.instance)}, label = ${luaStr(p.label || '')} }`
+      : p.place ? `{ place = ${luaStr(p.place)}, label = ${luaStr(p.label || '')} }`
       : `{ mapId = ${Number(p.mapId) || 0}, x = ${Number(p.x) || 0}, y = ${Number(p.y) || 0}, label = ${luaStr(p.label || '')} }`;
     if (r.waypoint) lines.push(`\t\t\twaypoint = ${point(r.waypoint)},`);
     // A route: its stops in order (the add-on shows a button per stop).
