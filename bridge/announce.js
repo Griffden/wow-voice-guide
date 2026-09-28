@@ -4,14 +4,15 @@
 // break, quest accepted, route stop reached) and, when the player switched that kind on, the
 // companion says one or two sentences about it in the selected Fish voice.
 //
-// The sentences are built here from the moment, the game state and the
-// offline quest database, without a model call, so they are instant and
-// free. Every kind is off by default, each kind is rate limited, and
+// The sentences are built here from the moment, the game state, the offline
+// quest database and the trainer data (bridge/trainer.js), without a model
+// call, so they are instant and free. Every kind is off by default, each kind is rate limited, and
 // announcements wait while the guide is answering. The add-on never sends
 // moments during combat. Informational only: nothing acts for the player.
 
 const GameState = require('./gamestate');
 const QuestDB = require('./questdb');
+const Trainer = require('./trainer');
 
 const KINDS = Object.freeze(['quest', 'level', 'zone', 'bags', 'narrate', 'route']);
 // Minimum time between two announcements of the same moment kind.
@@ -55,7 +56,8 @@ function scope(game) {
 }
 
 // What to say about one moment, or '' when there is nothing useful to say.
-function compose(fields, { game } = {}) {
+// trainerCosts: { CLASSTOKEN: { "Name|rank": copper } } from trainer visits.
+function compose(fields, { game, trainerCosts } = {}) {
   const kind = fields.kind;
   if (kind === 'quest') {
     const title = fields.title || 'A quest';
@@ -69,7 +71,15 @@ function compose(fields, { game } = {}) {
   }
   if (kind === 'level') {
     const spells = String(fields.spells || '').split(';').map(s => s.trim()).filter(Boolean);
-    return `Level ${fields.level || 'up'}!${spells.length ? ` New at your class trainer: ${listNames(spells)}.` : ''}`;
+    if (spells.length) return `Level ${fields.level || 'up'}! New at your class trainer: ${listNames(spells)}.`;
+    // The Forever client doesn't list a level's spells: use the trainer data.
+    let train = '';
+    if (game && Trainer.available()) {
+      const player = { ...GameState.playerInfo(game), level: Number(fields.level) || undefined };
+      const costs = trainerCosts && trainerCosts[Trainer.classToken(player.class)];
+      train = Trainer.levelUpText(player, GameState.knownSpellIds(game), costs);
+    }
+    return `Level ${fields.level || 'up'}!${train ? ` ${train}` : ''}`;
   }
   if (kind === 'zone') {
     const zone = fields.zone || 'a new zone';

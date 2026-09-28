@@ -18,7 +18,8 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | NPC and target awareness | When you talk to an NPC, the guide sees what they said and which quests they offer or accept (with quest IDs), so "what is he asking me to do?" works. It also knows your current target's name, level, elite/rare status, creature type and whether it is hostile. It never reads health, auras or cooldowns. |
 | Forever game data | Quests in your log that you mention (or your selected quest, when you ask "where do I go?") are looked up in the Wowhead WoW: Forever database before the guide answers: objectives, turn-in NPC, and quest text. With an OpenAI key and preset, the guide can also search that database itself (quests, NPCs with map coordinates, items, spells, zones) and the live web, choosing which lookups a question needs. Answers show their sources in game and as clickable buttons in the companion. |
 | Quests near you | Ask "what should I do?" or "any quests around here?" and the guide lists the quests you can pick up on your map, nearest quest giver first, from an offline WoW: Forever quest database converted from [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) (MIT). It filters by level, faction, race, class, the quests you have completed or already carry, and prerequisites. "Who gives X?" returns the giver and coordinates, which can become a waypoint. Works with every brain preset, offline. |
-| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (with the new spells at your trainer), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, reading newly accepted quests aloud in your Fish voice, and each route stop reached with where to go next. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
+| Class training | Ask "what should I train?" and the guide knows which class spells you can learn now and which come next, from the Forever client's own spell tables, checked against your spellbook. Prices come from the trainer window: open your class trainer once and the companion remembers them. Offline, every brain preset. |
+| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (the spells your class trainer now has for you, what they cost once you have visited the trainer, and any you skipped at earlier levels), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, reading newly accepted quests aloud in your Fish voice, and each route stop reached with where to go next. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
 | Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, and neither does Warcraft lore (story, history, characters), which every edition shares, while gameplay answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints and routes | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. An answer that sends you to several places lists them as numbered steps, each with its zone and area ("Dun Morogh, east of Kharanos") and coordinates when a lookup confirmed them, and shows **Start route** plus a button per stop. The game holds one waypoint at a time, so the route moves it to the next stop when you arrive (or when you click **Next stop**); with [TomTom](https://www.curseforge.com/wow/addons/tomtom) installed every stop is also put on the map, its arrow points at the current stop, and a single-waypoint answer gets the arrow too. Your own TomTom waypoints are never touched. **Copy /way** under a waypoint answer gives its stops as `/way #map x y label` lines to paste or share. You choose whether to set any of it; the guide does not move your character. |
@@ -200,6 +201,7 @@ The suite parses the real Lua and runs the add-on in a Lua VM against a stub of 
 
 - the game-state sections the add-on pushes, and how the companion merges them
 - the quest database's availability filters
+- the class trainer data: what a level-up announces, talent and race rules, trainer prices
 - the guide's lookup loop and answer labels
 - streamed speech over a mocked Fish WebSocket
 - announcement rate limits and combat hold
@@ -207,13 +209,14 @@ The suite parses the real Lua and runs the add-on in a Lua VM against a stub of 
 
 No real provider is called. A real-service smoke test still needs personal provider keys and a running Forever client.
 
-To rebuild the offline quest database from the latest AllTheThings data, run `npm run build:quests`.
+To rebuild the offline quest database from the latest AllTheThings data, run `npm run build:quests`. To rebuild the class trainer data from the Forever client tables, run `npm run build:trainer`.
 
 ## Data sources and credits
 
 - **Offline quest database:** converted from the [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) WoW: Forever data (MIT license; notice kept in [bridge/data/README.md](bridge/data/README.md)).
 - **Quest, NPC, item, and spell lookups:** Wowhead's public WoW: Forever tooltip and search data. Wowhead has no official API, so results are cached and requests kept small.
 - **Zone-to-map table:** generated from the Forever client's map tables on [wago.tools](https://wago.tools).
+- **Class trainer spells:** generated from the Forever client's spell tables on [wago.tools](https://wago.tools) (see [bridge/data/README.md](bridge/data/README.md)). Training costs are read from the trainer window in game.
 - **Forever add-on API reference:** checked against the capture in [forever-addon-kit](https://github.com/Thunderz96/forever-addon-kit).
 
 ## Current delivery status

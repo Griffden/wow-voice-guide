@@ -24,8 +24,12 @@ All notable changes to this project are recorded here. The format follows [Keep 
 - Item buttons under answers for the items the guide named (ids confirmed by a Wowhead lookup, or found on Wowhead by exact name when the guide only web-searched them): hover for the game tooltip, click to pin it, shift-click to link, ctrl-click to try on.
 - `/wow-claude errors` lists game-state reads the client rejected, kept in SavedVariables with a count and zone.
 - Quest narration: `/wow-claude narrate on` reads newly accepted quests aloud in the selected Fish voice, and "read me this quest" reads the selected quest on demand.
+- Class trainer spells on level-up: the level announcement names the spells your class trainer now has for you, their total cost, and any you skipped at earlier levels. The spell list comes from the Forever client's spell tables (`bridge/data/forever-trainer.json`, built by `npm run build:trainer`), filtered by race and talents and checked against the spellbook, which the add-on now reports (`spells` section). Prices are read while a class trainer window is open (`train` section) and kept per class. Questions about training, spells or abilities give the guide the same list.
 
 ### Fixed
+
+- The add-on could stay on "Connecting to the bridge..." for good after the game closed without saving (a crash or a killed client): its message counter went back to the last saved value while the bridge still counted those ids as handled, so every hello was dropped without an acknowledgement. A hello with an already handled id now tells the bridge the counter went back, and it forgets that id and every later one for the session.
+- The level-up announcement never named any spells on WoW: Forever, whose client returns nothing from `C_SpellBook.GetCurrentLevelSpells`.
 
 - Lua errors in dungeons: target and other game-state reads returned the client's secret values in instances, and the code that used them threw on every target change and quest update. Secret values now read as unavailable, and each section is built protected, so one failing read no longer stops the others.
 

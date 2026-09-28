@@ -170,6 +170,9 @@ test('after the hello, every game state section goes out in section records, the
   assert.equal(sections.target, '', 'empty sections go out too, so the bridge drops stale ones');
   assert.equal(sections.done, '7 completed in 1 chunks');
   assert.equal(sections['done.1'], '1~2,2,2~1,lj', 'runs of ids, base 36 deltas');
+  assert.equal(sections.spells, '5 known in 1 chunks', 'the spellbook without its future spell');
+  assert.deepEqual([...require('../bridge/gamestate').decodeIds(sections['spells.1'])], [75, 1978, 2764, 3044, 6603]);
+  assert.equal(sections.train, undefined, 'no trainer visited yet');
   // Delivered: the records leave the strip after a few seconds on screen.
   deliverState(vm);
   assert.equal(stateOnStrip(vm).records.length, 0);
@@ -186,6 +189,18 @@ test('after the hello, every game state section goes out in section records, the
   vm.run('STUB.posX = 0.2; STUB.now = STUB.now + 21; STUB.Tick(); STUB.RunTimers(); STUB.Tick()');
   next = stateOnStrip(vm);
   assert.match(next.sections.loc, /Position: 20\.0, 67\.8/);
+  deliverState(vm);
+  // A class trainer window: what is still to learn, with prices; learned spells left out.
+  vm.run(`STUB.trainer = { { "Arcane Shot", "Rank 2", "available", 600 }, { "Serpent Sting", "Rank 1", "used", 100 },
+    { "Wing Clip", "Rank 1", "unavailable", 1200 }, { "Track Humanoids", "", "available", 1000 } }
+    STUB.FireEvent("TRAINER_SHOW"); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  next = stateOnStrip(vm);
+  assert.deepEqual(Object.keys(next.sections), ['train']);
+  assert.equal(next.sections.train, 'Arcane Shot|2|600;Wing Clip|1|1200;Track Humanoids|0|1000');
+  deliverState(vm);
+  // A profession trainer is not a class trainer.
+  vm.run('STUB.tradeTrainer = true; STUB.trainer = { { "Skinning", "", "available", 10 } }; STUB.FireEvent("TRAINER_SHOW"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(stateOnStrip(vm).records.length, 0);
 });
 
 test('a question goes out right behind the state it needs, and context off clears the bridge', () => {

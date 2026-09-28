@@ -965,7 +965,7 @@ local CONTEXT_MAX = 1500 -- bytes of flattened context per reload-mode outbox
 -- section on the bridge; the key "*" clears them all (context off).
 local FS, GS = "\28", "\29"
 local STATE_RECORD_MAX = 1500 -- bytes of sections per record
-local STATE_DELAY = { default = 1.5, quests = 4, quest = 2, prog = 30, gear = 5, loc = 1, npc = 0.3, target = 0.5 }
+local STATE_DELAY = { default = 1.5, quests = 4, quest = 2, prog = 30, gear = 5, loc = 1, npc = 0.3, target = 0.5, spells = 3 }
 local MOVE_CHECK_SECONDS, MOVE_MIN = 20, 3 -- re-send the position after moving 3 map units
 local DONE_NEW_MAX = 300 -- bytes of turn-ins kept as a delta before the full list is re-sent
 
@@ -1032,6 +1032,15 @@ local function BuildSection(key, out)
 		end
 	elseif key == "done.new" then
 		out["done.new"] = table.concat(State.EncodeIds(st.doneNew, 100000), ",")
+	elseif key == "spells" then
+		-- Chunked like the completed quests; the bridge knows the class's spells.
+		local chunks, count = State.EncodeIds(State.KnownSpells(), STATE_RECORD_MAX - 100)
+		out["spells"] = count .. " known in " .. #chunks .. " chunks"
+		for i, chunk in ipairs(chunks) do out["spells." .. i] = chunk end
+		for i = #chunks + 1, st.spellChunks or 0 do out["spells." .. i] = "" end
+		st.spellChunks = #chunks
+	elseif key == "train" then
+		if st.train then out.train = st.train end
 	end
 end
 
@@ -1136,7 +1145,7 @@ function WoWClaude.SendFullState()
 	local st = StateRun()
 	st.sent = {}
 	st.full = true
-	local keys = { "char", "prog", "loc", "ways", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done" }
+	local keys = { "char", "prog", "loc", "ways", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done", "spells", "train" }
 	for _, key in ipairs(keys) do st.dirty[key] = GetTime() end
 	WoWClaude.FlushState(true)
 end
@@ -1193,11 +1202,13 @@ local STATE_EVENTS = {
 	UPDATE_INVENTORY_DURABILITY = { "gear" },
 	BAG_UPDATE_DELAYED = { "gear" },
 	USER_WAYPOINT_UPDATED = { "ways" },
+	SPELLS_CHANGED = { "spells" },
+	LEARNED_SPELL_IN_TAB = { "spells" },
 }
 local DIALOG_EVENTS = { GOSSIP_SHOW = true, QUEST_DETAIL = true, QUEST_GREETING = true, QUEST_PROGRESS = true, QUEST_COMPLETE = true }
 
 function WoWClaude.StateEvents()
-	local list = { "QUEST_TURNED_IN", "TAXIMAP_OPENED" }
+	local list = { "QUEST_TURNED_IN", "TAXIMAP_OPENED", "TRAINER_SHOW", "TRAINER_UPDATE" }
 	for e in pairs(STATE_EVENTS) do table.insert(list, e) end
 	for e in pairs(DIALOG_EVENTS) do table.insert(list, e) end
 	table.sort(list)
@@ -1233,6 +1244,14 @@ function WoWClaude.OnStateEvent(event, ...)
 			db.taxi = db.taxi or {}
 			db.taxi[mapId] = names
 			WoWClaude.MarkState("taxi")
+		end
+		return true
+	elseif event == "TRAINER_SHOW" or event == "TRAINER_UPDATE" then
+		-- The trainer API only answers while the window is open: read it now.
+		local ok, services = Guarded("state.train", State.TrainerServices)
+		if ok and services then
+			st.train = services
+			WoWClaude.MarkState("train")
 		end
 		return true
 	end

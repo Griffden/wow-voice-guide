@@ -307,9 +307,37 @@ C_Traits = {
 		for _, n in pairs(TRAIT_NODES) do if n.def == def then return { spellID = n.spell } end end
 	end,
 }
+-- Spellbook: two skill lines; the last entry is a "future" spell (not learned).
+Enum = Enum or {}
+Enum.SpellBookSpellBank = { Player = 0, Pet = 1 }
+Enum.SpellBookItemType = { None = 0, Spell = 1, FutureSpell = 2, PetAction = 3, Flyout = 4 }
+local BOOK = {
+	{ name = "General", items = { 6603, 2764 } },
+	{ name = "Marksmanship", items = { 75, 1978, 3044, 14281 }, future = 14281 },
+}
 C_SpellBook = {
 	GetCurrentLevelSpells = function(level) return STUB.levelSpells and STUB.levelSpells[level] end,
+	GetNumSpellBookSkillLines = function() return #BOOK end,
+	GetSpellBookSkillLineInfo = function(line)
+		local offset = 0
+		for i = 1, line - 1 do offset = offset + #BOOK[i].items end
+		return { name = BOOK[line].name, itemIndexOffset = offset, numSpellBookItems = #BOOK[line].items }
+	end,
+	GetSpellBookItemInfo = function(index, bank)
+		for _, line in ipairs(BOOK) do
+			if index <= #line.items then
+				local id = line.items[index]
+				return { spellID = id, itemType = id == line.future and Enum.SpellBookItemType.FutureSpell or Enum.SpellBookItemType.Spell }
+			end
+			index = index - #line.items
+		end
+	end,
 }
+-- Class trainer window, driven by STUB.trainer = { { name, subText, kind, cost }, ... }.
+function IsTradeskillTrainer() return STUB.tradeTrainer or false end
+function GetNumTrainerServices() return STUB.trainer and #STUB.trainer or 0 end
+function GetTrainerServiceInfo(i) local s = STUB.trainer[i]; return s[1], s[2], s[3] end
+function GetTrainerServiceCost(i) return STUB.trainer[i][4] end
 C_Spell = {
 	GetSpellName = function(id)
 		for _, n in pairs(TRAIT_NODES) do if n.spell == id then return n.name end end
@@ -353,7 +381,7 @@ function GetTaxiMapID() return 1414 end
 C_TaxiMap = {
 	GetAllTaxiNodes = function(mapId) return STUB.taxiNodes or {} end,
 }
-Enum = { FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 } }
+Enum.FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 }
 function GetInventoryItemLink(unit, slot) return STUB.gear and STUB.gear[slot] and STUB.gear[slot].link end
 function GetInventoryItemDurability(slot)
 	local g = STUB.gear and STUB.gear[slot]

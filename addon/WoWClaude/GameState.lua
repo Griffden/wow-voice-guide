@@ -78,6 +78,7 @@ S.Fit = Fit
 S.BUDGET = {
 	char = 400, prog = 200, loc = 250, quest = 1100, quests = 1200, npc = 1000,
 	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900, ways = 400,
+	train = 1400,
 }
 S.ORDER = { "char", "prog", "loc", "ways", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
 
@@ -735,6 +736,67 @@ function S.LowestDurability()
 		end
 	end
 	return lowest, where
+end
+
+---------------------------------------------------------------------------
+-- Class training: the spellbook, and a trainer's list while its window is open
+---------------------------------------------------------------------------
+
+-- Spell ids in the player's spellbook, "future" (not yet learned) entries left
+-- out. The bridge compares them with its trainer data (bridge/trainer.js).
+function S.KnownSpells()
+	local ids = {}
+	local book = C_SpellBook
+	if book and type(book.GetNumSpellBookSkillLines) == "function" then
+		local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+		local spellType = Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell or 1
+		for line = 1, Try(book.GetNumSpellBookSkillLines) or 0 do
+			local info = Try(book.GetSpellBookSkillLineInfo, line)
+			if type(info) == "table" and type(info.itemIndexOffset) == "number" and type(info.numSpellBookItems) == "number" then
+				for i = info.itemIndexOffset + 1, info.itemIndexOffset + info.numSpellBookItems do
+					local item = Try(book.GetSpellBookItemInfo, i, bank)
+					if type(item) == "table" and item.itemType == spellType and type(item.spellID) == "number" then table.insert(ids, item.spellID) end
+				end
+			end
+		end
+	elseif type(GetNumSpellTabs) == "function" then
+		for tab = 1, Try(GetNumSpellTabs) or 0 do
+			local _, _, offset, count = Try(GetSpellTabInfo, tab)
+			if type(offset) == "number" and type(count) == "number" then
+				for slot = offset + 1, offset + count do
+					local kind, id = Try(GetSpellBookItemInfo, slot, BOOKTYPE_SPELL or "spell")
+					if kind == "SPELL" and type(id) == "number" then table.insert(ids, id) end
+				end
+			end
+		end
+	end
+	return ids
+end
+
+-- What an open class trainer still has for the player: "Name|rank|copper"
+-- joined by ";", the cheapest levels first as listed. nil for a profession
+-- trainer or an empty list. The client tables have no prices; this is where
+-- the bridge learns them.
+function S.TrainerServices()
+	if Try(IsTradeskillTrainer) then return nil end
+	local n = Try(GetNumTrainerServices)
+	if type(n) ~= "number" or n == 0 then return nil end
+	local items, used = {}, 0
+	for i = 1, math.min(n, 200) do
+		local name, sub, kind = Try(GetTrainerServiceInfo, i)
+		if type(name) == "string" and name ~= "" and (kind == "available" or kind == "unavailable") then
+			local cost = Try(GetTrainerServiceCost, i)
+			if type(cost) == "number" then
+				local rank = tonumber(tostring(sub or ""):match("(%d+)")) or 0
+				local item = (Clean(name, 40):gsub("[|;]", " ")) .. "|" .. rank .. "|" .. math.floor(cost)
+				if used + #item + 1 > S.BUDGET.train then break end
+				table.insert(items, item)
+				used = used + #item + 1
+			end
+		end
+	end
+	if #items == 0 then return nil end
+	return table.concat(items, ";")
 end
 
 -- Names of the spells that become available at this level (to learn at the trainer).

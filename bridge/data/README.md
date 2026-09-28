@@ -54,3 +54,28 @@ The converter (`tools/att-parser.js`) reads ATT's Lua data files without running
 ```
 
 `n` name, `l` minimum level, `f` faction (`A`/`H`), `r` races, `c` classes, `pre` prerequisite quest ids (`pn`: how many of them are needed), `alt` mutually exclusive quests, `b` breadcrumb, `rep` repeatable, `sk` required skill line, `g` givers as `[npcId, x, y, uiMapId, faction?]` (npcId `0` for a location without a named giver, or just `[npcId]` without coordinates), `m` maps when there are no giver coordinates, `ev` holiday, `old` unverified. `npcs` maps NPC ids to names and `maps` uiMapIDs to zone names.
+
+# Offline WoW: Forever class trainer data
+
+`forever-trainer.json` lists the spells each class trainer teaches on WoW: Forever, by class and level. The level-up announcement and the guide's answers about training read it (`bridge/trainer.js`), together with the spells the add-on reports from your spellbook and the prices it reads while a class trainer window is open.
+
+## Source
+
+Converted from the Forever client's own spell tables (build 1.60.1.70009) on [wago.tools](https://wago.tools/db2): `SkillLineAbility`, `SkillRaceClassInfo`, `SkillLine`, `ChrClasses`, `SpellLevels`, `SpellName`, `Spell`, `Talent` and `TalentTab`. The client tables have no training costs; those come from trainer visits in game and are kept in the bridge's `state.json`.
+
+Kept: spells on a class's own skill lines that a trainer teaches (`AcquireMethod` 0), from level 2 up. Left out: talents, pet abilities (hunter Beast Training, warlock demons), runes, and helper spells such as "Bear Form (Passive)" or "Immolation Trap Effect". Some spells that come from a class quest on Forever (a hunter's Tame Beast, a warlock's Summon Voidwalker) are in the client tables like any trainer spell, so they are listed too.
+
+## Rebuilding
+
+```powershell
+npm run build:trainer                                  # download the tables
+node tools/build-trainer-db.js --csv C:\path\to\csvs   # <Table>.csv files already downloaded
+```
+
+## Record format
+
+```json
+{"l":14,"id":6572,"n":"Revenge","r":1}
+```
+
+Under `classes.<CLASS>`: `l` level, `id` spell id, `n` name, `r` rank, `rm` race mask when not every race can learn it (bit `1 << (raceId - 1)`), `t` a higher rank of a talent, taught only to players who have the talent. `talents.<CLASS>` maps the spell ids of those talents to their names.
