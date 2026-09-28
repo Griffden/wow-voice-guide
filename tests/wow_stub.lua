@@ -142,6 +142,13 @@ UIErrorsFrame = CreateFrame("Frame", "UIErrorsFrame")
 ChatFontNormal = {}
 OKAY, CANCEL = "Okay", "Cancel"
 NUM_CHAT_WINDOWS = 1
+-- Blizzard's chat box. Enter runs OnEnterPressed -> SendMessage -> SendText ->
+-- ParseText -> ProcessChatType or a slash command, so an add-on that replaces
+-- any of these taints every command typed there (/gquit gets blocked).
+ChatFrame1EditBox = CreateFrame("EditBox", "ChatFrame1EditBox")
+for _, m in ipairs({ "ProcessChatType", "HandleChatType", "ParseText", "SendText", "SendMessage", "OnEnterPressed", "UpdateHeader", "ClearChat" }) do
+	ChatFrame1EditBox[m] = function() end
+end
 StaticPopupDialogs = {}
 function StaticPopup_Show(which, a, b, data) STUB.popup = { which = which, data = data } end
 SlashCmdList = {}

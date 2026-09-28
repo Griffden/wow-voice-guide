@@ -22,7 +22,7 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, while answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
-| In-game chat and follow-ups | Type in the window or use `/ai <question>`; `/r` replies to the guide when it was the last messenger. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
+| In-game chat and follow-ups | Type in the window or use `/ai <question>` from the game chat box. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
 Try:
 
@@ -141,7 +141,6 @@ Typed chat remains available as a fallback. Fish only speaks voice-originated qu
 | `/voice` | Start one voice question without opening the guide window. |
 | `/voice-guide` | Show or hide the guide window. |
 | `/ai <question>` | Send a typed question from the regular game chat box. |
-| `/r <reply>` | Reply to the guide when it was the last messenger; otherwise WoW's normal whisper reply. |
 | `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
 | `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
 | `/wow-claude volume 150` | Set spoken-reply volume (0–200). |
