@@ -2076,7 +2076,7 @@ function WoWClaude.Render()
 			elseif not WoWClaude.IsConnected() then
 				Place("system", "Not connected to the bridge. Start it (npm start in the wow-claude folder, or wow-claude in your project), then click Connect below.", "", true)
 			else
-				Place("system", "Click the box below and type to start. Shift-click an item, spell or quest to link it into your message. /wow-claude help lists the commands; /ai <text> and /r work from the game chat too.", "", true)
+				Place("system", "Click the box below and type to start. Shift-click an item, spell or quest to link it into your message. /wow-claude help lists the commands; /ai <text> works from the game chat too.", "", true)
 			end
 		end
 		for i = n + 1, #ui.bubbles do
@@ -2263,104 +2263,10 @@ end
 function WoWClaude.Notify(chat, text)
 	pcall(PlaySound, 3081)
 	WoWClaude.UpdateMini()
-	-- Until a real whisper arrives, /r replies to this chat.
-	run.lastMessenger = "claude"
-	run.lastReplyChat = chat.id
 	EchoToChat(chat, text)
 	if ui.frame and ui.frame:IsShown() and db.activeChat == chat.id then return end
 	if UIErrorsFrame then
 		UIErrorsFrame:AddMessage("Voice Guide replied in " .. Display(chat.name), 0.5, 0.8, 1, 1)
-	end
-end
-
--- /r goes to Claude when Claude was the last one to message you, exactly like
--- whisper reply, and the box shows a "To Claude [chat]:" header while you type.
---
--- The chat type underneath is left alone (a custom type would leak into chat
--- settings); instead the box remembers a Claude target, the header is repainted
--- over the game's own, and the send entry points are intercepted. Any other chat
--- type, Tab, Esc or a cleared box drops the target again.
-local CLAUDE_R, CLAUDE_G, CLAUDE_B = 0.49, 0.78, 1.0
-
-local function PaintClaudeHeader(eb, chat)
-	local header = _G[eb:GetName() .. "Header"]
-	local suffix = _G[eb:GetName() .. "HeaderSuffix"]
-	if not header then return end
-	eb.claudePainting = true
-	eb:UpdateHeader() -- lay out normally first, then repaint
-	eb.claudePainting = nil
-	header:SetWidth(0)
-	header:SetText("To Voice Guide [" .. Display(chat.name) .. "]: ")
-	header:SetTextColor(CLAUDE_R, CLAUDE_G, CLAUDE_B)
-	if suffix then suffix:Hide() end
-	eb:SetTextInsets(15 + header:GetWidth(), 13, 0, 0)
-	eb:SetTextColor(CLAUDE_R, CLAUDE_G, CLAUDE_B)
-end
-
-local function SendBoxToClaude(eb)
-	local chat = FindChat(eb.claudeTarget)
-	local text = Trim(eb:GetText() or "")
-	eb.claudeTarget = nil
-	eb:ClearChat()
-	if chat and db.activeChat ~= chat.id then WoWClaude.SwitchChat(chat.id) end
-	if text ~= "" then
-		WoWClaude.Send(text)
-	else
-		WoWClaude.Toggle(true)
-		if ui.input then ui.input:SetFocus() end
-	end
-end
-
-local function HookReplyCommand()
-	for i = 1, (NUM_CHAT_WINDOWS or 10) do
-		local eb = _G["ChatFrame" .. i .. "EditBox"]
-		if eb and eb.ProcessChatType and not eb.claudeReplyHooked then
-			eb.claudeReplyHooked = true
-
-			local origProcess = eb.ProcessChatType
-			eb.ProcessChatType = function(self, msg, index, send, ...)
-				if index ~= "REPLY" then
-					self.claudeTarget = nil
-					return origProcess(self, msg, index, send, ...)
-				end
-				if not (db and run.lastMessenger == "claude") then
-					return origProcess(self, msg, index, send, ...)
-				end
-				local chat = FindChat(run.lastReplyChat) or ActiveChat()
-				if send == 1 then
-					self:SetText(msg or "")
-					self.claudeTarget = chat and chat.id
-					SendBoxToClaude(self)
-					return true
-				end
-				self.claudeTarget = chat and chat.id
-				self:SetText(msg or "")
-				if chat then PaintClaudeHeader(self, chat) end
-				return true
-			end
-
-			-- Enter arrives here; nothing below us ever sees a Claude-targeted box.
-			for _, name in ipairs({ "SendMessage", "SendText" }) do
-				local orig = eb[name]
-				if orig then
-					eb[name] = function(self, ...)
-						if self.claudeTarget then
-							SendBoxToClaude(self)
-							return
-						end
-						return orig(self, ...)
-					end
-				end
-			end
-
-			-- Anything that repaints the header normally (Tab, /s, sticky reset) ends Claude mode.
-			hooksecurefunc(eb, "UpdateHeader", function(self)
-				if not self.claudePainting then self.claudeTarget = nil end
-			end)
-			hooksecurefunc(eb, "ClearChat", function(self)
-				self.claudeTarget = nil
-			end)
-		end
 	end
 end
 
@@ -3027,7 +2933,6 @@ local HELP = table.concat({
 	"/wow-claude hide                   hide the window completely",
 	"/wow-claude size reset             restore the default window size and center it (or right-click the resize grip)",
 	"/ai <text>                         send <text> to the current chat straight from the game chat box",
-	"/r <text>                          replies to the guide when it was the last to message you (else normal whisper reply)",
 	"/wow-claude <text>                 same as /ai",
 	"/wow-claude echo full|short|off|<chars>   how much of each reply to print in the game chat",
 	"/wow-claude longchat on|off        let the game chat box take 4000 characters (for long /ai messages)",
@@ -3058,7 +2963,7 @@ local HELP = table.concat({
 SLASH_WOWVOICETALK1 = "/voice"
 SlashCmdList["WOWVOICETALK"] = function() WoWClaude.StartVoice() end
 
--- /ai <text>: send straight from the game chat box (like /r, but for Claude).
+-- /ai <text>: send straight from the game chat box.
 SLASH_CLAUDEASK1 = "/ai"
 SLASH_CLAUDEASK2 = "/ask"
 SlashCmdList["CLAUDEASK"] = function(msg)
@@ -3288,8 +3193,6 @@ local ev = CreateFrame("Frame")
 ev:RegisterEvent("ADDON_LOADED")
 ev:RegisterEvent("PLAYER_LOGIN")
 ev:RegisterEvent("PLAYER_REGEN_ENABLED")
-ev:RegisterEvent("CHAT_MSG_WHISPER")
-ev:RegisterEvent("CHAT_MSG_BN_WHISPER")
 -- Game state events. An event this client doesn't know makes RegisterEvent
 -- throw, so each one is registered on its own through Try.
 for _, name in ipairs(WoWClaude.StateEvents()) do Try(ev.RegisterEvent, ev, name) end
@@ -3299,9 +3202,6 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		if arg1 == ADDON_NAME then
 			InitDB()
 		end
-	elseif event == "CHAT_MSG_WHISPER" or event == "CHAT_MSG_BN_WHISPER" then
-		-- A real person whispered: /r belongs to them again.
-		run.lastMessenger = "player"
 	elseif event == "PLAYER_LOGIN" then
 		if not db then InitDB() end
 		BuildUI()
@@ -3338,7 +3238,6 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		WoWClaude.ArmAutoRefresh()
 		WoWClaude.UpdateDot()
 		if db.settings.longchat then ApplyLongChat() end
-		HookReplyCommand()
 		C_Timer.NewTicker(TICK_SECONDS, Tick)
 		C_Timer.After(3, WoWClaude.SayHello)
 	elseif event == "PLAYER_REGEN_ENABLED" then
