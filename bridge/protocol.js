@@ -42,6 +42,20 @@ function markHandled(state, job, now = Date.now()) {
   (state.seen = state.seen || {})[key] = now;
 }
 
+// The game only writes its saved data on logout or reload, so a crash or a
+// killed client restarts the counter from an older value under the same session
+// token. Those ids look handled and would be dropped without an ack, leaving the
+// addon stuck on "Connecting". A hello is safe to act on twice, so a handled id
+// arriving as a hello means the counter went back: forget that id and every
+// later one for the session. Returns how many ids were forgotten.
+function rewindHandled(state, job) {
+  const h = state.handled[job.session || ''];
+  if (!h || !h[job.id]) return 0;
+  let n = 0;
+  for (const k of Object.keys(h)) if (Number(k) >= job.id) { delete h[k]; n++; }
+  return n;
+}
+
 // Every saved-data reset in the game mints a new session token; forget the ones
 // not heard from in a month so state.json and transcripts.json stop growing.
 const MONTH_MS = 30 * 24 * 3600 * 1000;
@@ -317,7 +331,7 @@ const SILENT_WAV = (() => {
 
 module.exports = {
   fromHex, pad3, slotNumber, chatKey, sessKey,
-  alreadyHandled, markHandled, pruneStale, MONTH_MS,
+  alreadyHandled, markHandled, rewindHandled, pruneStale, MONTH_MS,
   resolveCwd, sameFolder,
   parseFlags, jobsFromStrip, parseOutbox, systemPrompt,
   ruleFor, describeToolUse,

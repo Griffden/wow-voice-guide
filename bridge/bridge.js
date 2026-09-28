@@ -356,6 +356,10 @@ function gameContext(question) {
 // ---------------------------------------------------------------------------
 
 function submit(job) {
+  if (job.hello && job.session) {
+    const n = P.rewindHandled(state, job);
+    if (n) log(`#${job.id}@${job.session} hello with a handled id: game counter went back, forgot ${n} handled id(s)`);
+  }
   if (alreadyHandled(job)) return;
   if (job.ctx !== undefined || job.state !== undefined) applyGameState(job);
   if (job.volume !== null && job.volume !== undefined) {
