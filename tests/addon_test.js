@@ -113,6 +113,20 @@ test('addon loads, builds its UI and creates a first chat', () => {
   assert.equal(vm.evaluate('SlashCmdList.CLAUDEASK ~= nil'), 'true');
 });
 
+test('the game chat box is left untouched, so protected slash commands like /gquit are not blocked', () => {
+  const vm = newVM();
+  vm.run('BEFORE = {}; for k, v in pairs(ChatFrame1EditBox) do BEFORE[k] = v end');
+  login(vm);
+  connect(vm);
+  vm.run(`
+    local changed = {}
+    for k, v in pairs(ChatFrame1EditBox) do if BEFORE[k] ~= v then changed[#changed + 1] = tostring(k) end end
+    for k in pairs(BEFORE) do if ChatFrame1EditBox[k] == nil then changed[#changed + 1] = tostring(k) end end
+    table.sort(changed)
+    RESULT = table.concat(changed, ",")`);
+  assert.equal(vm.evaluate('RESULT'), '', 'add-on wrote to Blizzard\'s chat box');
+});
+
 test('hello goes out on the strip after login', () => {
   const vm = newVM();
   login(vm);

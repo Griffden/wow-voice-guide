@@ -24,7 +24,7 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints and routes | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. An answer that sends you to several places lists them as numbered steps, each with its zone and area ("Dun Morogh, east of Kharanos") and coordinates when a lookup confirmed them, and shows **Start route** plus a button per stop. The game holds one waypoint at a time, so the route moves it to the next stop when you arrive (or when you click **Next stop**); with [TomTom](https://www.curseforge.com/wow/addons/tomtom) installed every stop is also put on the map, its arrow points at the current stop, and a single-waypoint answer gets the arrow too. Your own TomTom waypoints are never touched. **Copy /way** under a waypoint answer gives its stops as `/way #map x y label` lines to paste or share. You choose whether to set any of it; the guide does not move your character. |
 | Item buttons | Items an answer names that the Wowhead lookup found get a button with their icon: hover for the real in-game tooltip, click to pin it, shift-click to link it in chat, ctrl-click to try it on. |
-| In-game chat and follow-ups | Type in the window or use `/ai <question>`; `/r` replies to the guide when it was the last messenger. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
+| In-game chat and follow-ups | Type in the window or use `/ai <question>` from the game chat box. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
 Try:
 
@@ -143,7 +143,6 @@ Typed chat remains available as a fallback. Fish only speaks voice-originated qu
 | `/voice` | Start one voice question without opening the guide window. |
 | `/voice-guide` | Show or hide the guide window. |
 | `/ai <question>` | Send a typed question from the regular game chat box. |
-| `/r <reply>` | Reply to the guide when it was the last messenger; otherwise WoW's normal whisper reply. |
 | `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
 | `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
 | `/wow-claude volume 150` | Set spoken-reply volume (0–200). |

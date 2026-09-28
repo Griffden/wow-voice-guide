@@ -4,6 +4,10 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Fixed
+
+- `/gquit` and other protected slash commands no longer fail with "blocked by the add-on". The add-on used to replace methods on the game chat box so `/r` could reply to the guide, which tainted every command typed there. `/r` is WoW's normal whisper reply again; reply to the guide with `/ai <text>`, the [reply] link, or the window.
+
 ### Added
 
 - WoW Voice Guide desktop companion with microphone capture, Deepgram Flux automatic end-of-turn, configurable non-Claude guide models, and Fish Audio WAV playback.
