@@ -1,8 +1,9 @@
 'use strict';
 // Opt-in spoken announcements: the add-on reports a moment (an "a" record:
 // quest objectives done, level up, new zone, bags nearly full, gear about to
-// break, quest accepted, route stop reached) and, when the player switched that kind on, the
-// companion says one or two sentences about it in the selected Fish voice.
+// break, quest accepted, route stop reached, Polestar's guide moving on) and,
+// when the player switched that kind on, the companion says one or two
+// sentences about it in the selected Fish voice.
 //
 // The sentences are built here from the moment, the game state, the offline
 // quest database and the trainer data (bridge/trainer.js), without a model
@@ -13,10 +14,17 @@
 const GameState = require('./gamestate');
 const QuestDB = require('./questdb');
 const Trainer = require('./trainer');
+const Polestar = require('./polestar');
 
-const KINDS = Object.freeze(['quest', 'level', 'zone', 'bags', 'narrate', 'route']);
+const KINDS = Object.freeze(['quest', 'level', 'zone', 'bags', 'narrate', 'route', 'polestar']);
 // Minimum time between two announcements of the same moment kind.
-const MIN_INTERVAL_MS = Object.freeze({ quest: 10000, level: 0, zone: 90000, bags: 300000, repair: 300000, accept: 0, route: 0 });
+const MIN_INTERVAL_MS = Object.freeze({
+  quest: 10000, level: 0, zone: 90000, bags: 300000, repair: 300000, accept: 0, route: 0,
+  pstep: 0, pskip: 0, pdone: 0, proute: 0, ptrain: 0, plevel: 0,
+});
+// A newer moment of these kinds replaces one still waiting: only the step
+// Polestar is on now is worth saying.
+const LATEST_ONLY = new Set(['pstep']);
 const STALE_MS = 60000;
 const QUEUE_MAX = 4;
 
@@ -30,6 +38,7 @@ function settings(cfg) {
 function toggleFor(kind) {
   if (kind === 'accept') return 'narrate';
   if (kind === 'repair') return 'bags';
+  if (Polestar.MOMENTS.includes(kind)) return 'polestar';
   return kind;
 }
 
@@ -109,6 +118,7 @@ function compose(fields, { game, trainerCosts } = {}) {
     const parts = [sentence(fields.title), fields.text, fields.objectives ? sentence(fields.objectives) : ''].filter(Boolean);
     return parts.join(' ');
   }
+  if (Polestar.MOMENTS.includes(kind)) return Polestar.compose(fields);
   return '';
 }
 
@@ -138,6 +148,7 @@ class Announcer {
     const say = compose(fields, context);
     if (!say) return 'nothing to say';
     this.last[kind] = at;
+    if (LATEST_ONLY.has(kind)) this.queue = this.queue.filter(item => item.kind !== kind);
     this.queue.push({ kind, say, at });
     while (this.queue.length > QUEUE_MAX) this.queue.shift();
     this.pump();

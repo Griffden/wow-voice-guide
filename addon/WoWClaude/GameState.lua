@@ -20,6 +20,7 @@
 --   prof     professions and skill ranks               skill changes
 --   taxi     known flight paths                        opening a flight map
 --   gear     equipped items, durability, bag space     equipment/bag changes
+--   polestar Polestar's guide step (PolestarLink.lua)  Polestar's messages
 --   done.N   completed quest ids, compressed           once per session, then
 --   done.new quests turned in since then               QUEST_TURNED_IN
 --
@@ -80,7 +81,7 @@ S.BUDGET = {
 	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900, ways = 400,
 	train = 1400,
 }
-S.ORDER = { "char", "prog", "loc", "ways", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
+S.ORDER = { "char", "prog", "loc", "ways", "polestar", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
 
 local function Money(copper)
 	copper = tonumber(copper) or 0

@@ -30,6 +30,7 @@ const GameState = require('./gamestate');
 const Speech = require('./speech');
 const VoicePresets = require('./voice-presets');
 const Announce = require('./announce');
+const Polestar = require('./polestar');
 const Trainer = require('./trainer');
 
 const HERE = __dirname;
@@ -571,8 +572,10 @@ async function runAssistantJob(job, text) {
       input.onSpeech = delta => speaker.push(delta);
       input.onLookup = () => speaker.lookupStarted();
     }
-    // "Read me this quest" is read straight from the quest log, no model call.
-    let answer = readQuestAnswer(job.text);
+    // "Read me this quest" is read straight from the quest log, and Polestar
+    // commands ("skip this step", "read me the step") are answered here: no model call.
+    let answer = readQuestAnswer(job.text) || Polestar.answer(job.text, cfg.gameContext === false ? null : state.game);
+    if (answer && answer.polestar) log(`${tag} polestar command: ${answer.polestar.action}${answer.polestar.arg ? ` "${answer.polestar.arg}"` : ''}`);
     if (!answer) {
       try { answer = await Providers.requestGuideAnswer(cfg, input); }
       catch (e) { if (speaker) speaker.cancel(); throw e; }
@@ -586,6 +589,7 @@ async function runAssistantJob(job, text) {
       waypoint: answer.waypoint,
       waypoints: answer.waypoints,
       items: answer.items,
+      polestar: answer.polestar,
       speechEndsAt: speaker ? Speech.estimatedSpeechEnd(answer.speech, speaker) : null,
     });
     if (!speech) {

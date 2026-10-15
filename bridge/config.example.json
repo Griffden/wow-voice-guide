@@ -68,7 +68,8 @@
     "zone": false,
     "bags": false,
     "narrate": false,
-    "route": false
+    "route": false,
+    "polestar": false
   },
   "gameContext": true,
   "pollMs": 750,

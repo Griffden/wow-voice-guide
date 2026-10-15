@@ -119,7 +119,7 @@ function parseFlags(flags) {
     else if (tok.startsWith('ann=')) {
       for (const pair of tok.slice(4).split(',')) {
         const [kind, on] = pair.split(':');
-        if (/^(quest|level|zone|bags|narrate|route)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
+        if (/^(quest|level|zone|bags|narrate|route|polestar)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
       }
     }
     else if (tok === 'v') out.voice = true;
@@ -292,6 +292,10 @@ function luaTable(globalName, records, opts = {}) {
     if (r.waypoint) lines.push(`\t\t\twaypoint = ${point(r.waypoint)},`);
     // A route: its stops in order (the add-on shows a button per stop).
     if (Array.isArray(r.waypoints) && r.waypoints.length) lines.push(`\t\t\twaypoints = { ${r.waypoints.map(point).join(', ')} },`);
+    // A Polestar voice command (bridge/polestar.js): the add-on asks Polestar to do it.
+    if (r.polestar && /^(skip|unskip|back|ahead|current|aim|guide)$/.test(r.polestar.action)) {
+      lines.push(`			polestar = { action = ${luaStr(r.polestar.action)}, arg = ${luaStr(r.polestar.arg || '')} },`);
+    }
     if (Array.isArray(r.items) && r.items.length) {
       lines.push(`\t\t\titems = { ${r.items.map(i => `{ id = ${Number(i.id) || 0}, name = ${luaStr(i.name || '')} }`).join(', ')} },`);
     }

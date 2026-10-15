@@ -36,7 +36,7 @@ test('the add-on flags parse: "a" moments and in-game switches; slot files carry
   assert.equal(P.parseFlags('').announceSet, undefined);
   const lua = P.luaTable('WoWClaude_SlotData', [], { now: 1000, announce: { quest: true, zone: false } });
   assert.match(lua, /\n\tannounce = \{ quest = true, zone = false \},\n/);
-  assert.deepEqual(A.settings({ announce: { quest: true, zone: 'yes' } }), { quest: true, level: false, zone: false, bags: false, narrate: false, route: false }, 'off unless switched on');
+  assert.deepEqual(A.settings({ announce: { quest: true, zone: 'yes' } }), { quest: true, level: false, zone: false, bags: false, narrate: false, route: false, polestar: false }, 'off unless switched on');
 });
 
 test('each moment becomes a short sentence from the game state and the quest database', () => {

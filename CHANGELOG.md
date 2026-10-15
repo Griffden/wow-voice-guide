@@ -4,6 +4,10 @@ All notable changes to this project are recorded here. The format follows [Keep 
 
 ## [Unreleased]
 
+### Added
+
+- [Polestar](https://github.com/fitzforge/polestar) support. With the Polestar leveling guide installed, a new `polestar` game state section tells the guide Polestar's current step: who to talk to now ("person 2 of 8"), the goals there with their counters, who comes next, where the arrow points (in live map coordinates), the rest of the step, quests Polestar skipped and why, a pending next-zone choice and the other open guides. A new `polestar` announcement (off by default) reads each step and each next person aloud as you reach them, plus skipped quests, a finished guide, the next-zone choice, class training due and an out-leveled guide. Voice commands drive Polestar without a model call: "read me the step", "skip this step", "undo skip", "go back a step", "show me the next step", "back to the current step", "point me at the second goal", "switch to the mining guide"; in combat they wait until it ends. `/wow-claude polestar` shows what the guide sees, and `/wow-claude polestar dump` shows Polestar's raw step view (also saved in `WoWClaudeDB.polestarDump`) to check its shape on a live client. Only Polestar's public interface is used; its saved data is never written.
+
 ### Fixed
 
 - `/gquit` and other protected slash commands no longer fail with "blocked by the add-on". The add-on used to replace methods on the game chat box so `/r` could reply to the guide, which tainted every command typed there. `/r` is WoW's normal whisper reply again; reply to the guide with `/ai <text>`, the [reply] link, or the window.

@@ -23,6 +23,7 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, and neither does Warcraft lore (story, history, characters), which every edition shares, while gameplay answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
 | Optional waypoints and routes | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. An answer that sends you to several places lists them as numbered steps, each with its zone and area ("Dun Morogh, east of Kharanos") and coordinates when a lookup confirmed them, and shows **Start route** plus a button per stop. The game holds one waypoint at a time, so the route moves it to the next stop when you arrive (or when you click **Next stop**); with [TomTom](https://www.curseforge.com/wow/addons/tomtom) installed every stop is also put on the map, its arrow points at the current stop, and a single-waypoint answer gets the arrow too. Your own TomTom waypoints are never touched. **Copy /way** under a waypoint answer gives its stops as `/way #map x y label` lines to paste or share. You choose whether to set any of it; the guide does not move your character. |
+| Polestar leveling guide | With [Polestar](https://www.curseforge.com/wow/addons/polestar-guides) installed, the voice guide follows its route: it knows the step you are on, who to talk to now and what to do there, where Polestar's arrow points and which quests Polestar skipped, so "what's next?" and "why am I going here?" are answered from your Polestar step. Switch on the `polestar` announcement and it reads each step aloud as you reach it ("Next, Foreman Thazz'ril: accept Lazy Peons."), plus skipped quests, the end of a guide, the next-zone choice, class training reminders and out-leveled guides. Drive Polestar by voice: "read me the step", "skip this step", "undo skip", "go back a step", "back to the current step", "point me at the second goal", "switch to the mining guide". `/wow-claude polestar` shows what the guide sees. Only Polestar's public functions are used; its saved data is never touched. |
 | Item buttons | Items an answer names that the Wowhead lookup found get a button with their icon: hover for the real in-game tooltip, click to pin it, shift-click to link it in chat, ctrl-click to try it on. |
 | In-game chat and follow-ups | Type in the window or use `/ai <question>` from the game chat box. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
@@ -33,6 +34,7 @@ Try:
 - While talking to an NPC: “Which of these quests should I take?”
 - “Where is Cerellean Whiteclaw?” (answers with coordinates and a **Set waypoint** button)
 - “What talents do I have?” or “Read me this quest.”
+- With Polestar: “Read me the step”, “Skip this step”, or “Why does Polestar send me to the Barrens now?”
 
 For a specific item or quest, shift-click its link into the guide input before asking.
 
@@ -216,6 +218,7 @@ To rebuild the offline quest database from the latest AllTheThings data, run `np
 - **Quest, NPC, item, and spell lookups:** Wowhead's public WoW: Forever tooltip and search data. Wowhead has no official API, so results are cached and requests kept small.
 - **Zone-to-map table:** generated from the Forever client's map tables on [wago.tools](https://wago.tools).
 - **Class trainer spells:** generated from the Forever client's spell tables on [wago.tools](https://wago.tools) (see [bridge/data/README.md](bridge/data/README.md)). Training costs are read from the trainer window in game.
+- **Polestar support:** built on the public add-on interface documented in [fitzforge/polestar](https://github.com/fitzforge/polestar) (`docs/ARCHITECTURE.md`); Polestar itself is a separate add-on you install from CurseForge.
 - **Forever add-on API reference:** checked against the capture in [forever-addon-kit](https://github.com/Thunderz96/forever-addon-kit).
 
 ## Current delivery status

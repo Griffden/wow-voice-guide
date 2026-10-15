@@ -19,6 +19,9 @@ const SECTIONS = Object.freeze([
   { key: 'char', weight: 100 },
   { key: 'loc', weight: 95 },
   { key: 'ways', weight: 40 },
+  // Polestar's current step (addon/WoWClaude/PolestarLink.lua), when the
+  // player follows its guide: what "what's next?" is about.
+  { key: 'polestar', weight: 88 },
   { key: 'prog', weight: 50 },
   { key: 'target', weight: 70 },
   { key: 'npc', weight: 75 },
@@ -42,6 +45,7 @@ const BOOSTS = Object.freeze({
   char: /\b(hearth(?:stone)?|home|bind)\b/,
   quest: /\b(quest|objective|turn in|where (?:do i|should i) go|next|task)\b/,
   ways: /\b(waypoints?|way ?points?|markers?|pins?|arrow|tomtom|marked)\b/,
+  polestar: /\b(polestar|guide|steps?|next|skip(?:ped)?|route|arrow|what (?:do|should) i do|where (?:do|should) i go)\b/,
 });
 
 function newStore() {

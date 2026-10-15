@@ -22,6 +22,7 @@ test('researched answer logs lookup and completes without a reference error', as
     state: { game: { sections: {} } },
     answering: 0,
     readQuestAnswer: () => null,
+    Polestar: require('../bridge/polestar'),
     cfg: { playerGuide: true, fish: { speakTyped: false } },
     Providers: {
       requestGuideAnswer: async (_cfg, input) => {

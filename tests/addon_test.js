@@ -33,7 +33,7 @@ function newVM() {
   };
   const num = (expr) => Number(evaluate(expr));
   run(fs.readFileSync(path.join(__dirname, 'wow_stub.lua'), 'utf8'));
-  for (const f of ['Codec.lua', 'GameState.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
+  for (const f of ['Codec.lua', 'GameState.lua', 'PolestarLink.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
   return { run, evaluate, num };
 }
 
@@ -1110,10 +1110,168 @@ test('announcements wait out combat, respect in-game switches, and follow the co
   vm.run('SlashCmdList.WOWCLAUDE("narrate on")');
   assert.ok(stripRecords(vm).some(r => r.flags === 'ann=narrate:1'));
   vm.run('SlashCmdList.WOWCLAUDE("announce all on")');
-  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1,route:1'));
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1,route:1,polestar:1'));
   // The companion's settings arrive with the next slot.
   nextSlot(vm, '{ now = time(), cwd = "", replies = {}, announce = { quest = true, level = false, zone = false, bags = false, narrate = false } }');
   vm.run('WoWClaude.Connect(); STUB.now = STUB.now + 6; STUB.Tick()');
   assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.level'), 'false');
   assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.quest'), 'true');
+});
+
+// ---------------------------------------------------------------------------
+// Polestar (PolestarLink.lua), against the fake in wow_stub.lua
+// ---------------------------------------------------------------------------
+
+function polestarVM() {
+  const vm = newVM();
+  vm.run('STUB.InstallPolestar()');
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  return vm;
+}
+
+// Ask something and let the bridge answer with a Polestar command; returns
+// the line the add-on added to the chat.
+function polestarReply(vm, action, arg = '') {
+  vm.run('WoWClaude.Send("a polestar command")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "OK.", polestar = { action = "${action}", arg = "${arg}" } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  return vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text');
+}
+
+const POLESTAR_SECTION = [
+  'Polestar guide: Durotar 1-6 (step 1 of 40, 4 of 40 steps done)',
+  'Step 1: Valley of Trials',
+  'Now at: Gornek (person 1 of 2)',
+  'To do now: Accept Cutting Teeth',
+  "Then: Foreman Thazz'ril",
+  'Arrow: Accept Cutting Teeth, Durotar 42.6, 67.8',
+  "Rest of the step: Turn in Your Place In The World at Gornek - done; Accept Lazy Peons from Foreman Thazz'ril; Kill Mottled Boar 3/8 for Cutting Teeth; Loot everything, vendor at the den (optional)",
+  'Other Polestar guides open: Mining 1-300 (step 3 of 20)',
+].join('\n');
+
+test('with Polestar, its current step becomes the "polestar" section: who to see, what to do, the arrow in live coordinates', () => {
+  const vm = polestarVM();
+  assert.equal(stateOnStrip(vm).sections.polestar, POLESTAR_SECTION);
+  assert.ok(vm.evaluate('WoWClaude.GameContext()').includes('Now at: Gornek (person 1 of 2)'), '/wow-claude context shows it too');
+});
+
+test('without Polestar there is no section, and commands say it is missing', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  assert.equal(stateOnStrip(vm).sections.polestar, '');
+  deliverState(vm);
+  assert.equal(polestarReply(vm, 'skip'), 'Polestar is not loaded.');
+  vm.run('SlashCmdList.WOWCLAUDE("polestar")');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /^Polestar is not loaded/);
+});
+
+test('Polestar narration: the step at login is only noted, the next person or step is announced, browsing is not', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  assert.equal(announcements(vm).length, 0, 'the step at login is only noted');
+  // Gornek is done: the focus moves to the next person in the same step.
+  vm.run(`local v = STUB.polestar.views[1]; v.goals[2].status = "done"; v.groups[1].done = true; v.focus = 2
+    Polestar.Fire("STEP_UPDATED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  assert.deepEqual(announcements(vm), [{
+    kind: 'pstep', guide: 'Durotar 1-6', step: '1', of: '40', title: 'Valley of Trials', who: "Foreman Thazz'ril",
+    person: '2', persons: '2', now: 'Accept Lazy Peons', then: 'Kill Mottled Boar 3/8 for Cutting Teeth', same: '1',
+  }]);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nNow at: Foreman Thazz'ril \(person 2 of 2\)\nTo do now: Accept Lazy Peons\nThen: Kill Mottled Boar 3\/8 for Cutting Teeth\n/);
+  deliverState(vm);
+  // A kill ticks a counter: same person, nothing to say.
+  vm.run('STUB.polestar.views[1].goals[4].progress.cur = 4; Polestar.Fire("STEP_UPDATED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(announcements(vm).length, 0);
+  deliverState(vm);
+  // Several updates in a row are spoken once, as they end up.
+  vm.run(`STUB.polestar.step, STUB.polestar.live = 2, 2
+    Polestar.Fire("STEP_CHANGED", 2); Polestar.Fire("STEP_UPDATED", 2); Polestar.Fire("WAYPOINT_CHANGED", nil); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  assert.deepEqual(announcements(vm), [{
+    kind: 'pstep', guide: 'Durotar 1-6', step: '2', of: '40', title: 'Razor Hill', who: "Gar'Thok",
+    person: '1', persons: '1', now: 'Accept Vanquish the Betrayers', then: '', same: '',
+  }]);
+  deliverState(vm);
+  // Looking back at step 1 says nothing; the section says what is shown.
+  vm.run('STUB.polestar.step = 1; Polestar.Fire("STEP_CHANGED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(announcements(vm).length, 0);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nThe player is looking at step 1; the guide is on step 2\n/);
+});
+
+test('Polestar voice commands: skip, undo, back, current, aim by number or name, switch or open a guide', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  const calls = () => vm.evaluate('table.concat(STUB.polestar.calls, ", ")');
+  assert.equal(polestarReply(vm, 'skip'), 'Polestar skipped step 1. Say "undo skip" to bring it back.');
+  assert.equal(vm.num('STUB.polestar.step'), 2);
+  assert.equal(polestarReply(vm, 'unskip'), 'Step 1 is open again.');
+  assert.equal(vm.num('STUB.polestar.step'), 1);
+  assert.equal(polestarReply(vm, 'unskip'), 'There is no skipped step to bring back in this guide.');
+  vm.run('STUB.polestar.step, STUB.polestar.live = 2, 2');
+  assert.equal(polestarReply(vm, 'back'), 'Polestar shows step 1: Valley of Trials.');
+  assert.equal(polestarReply(vm, 'current'), 'Polestar shows step 2: Razor Hill.');
+  vm.run('STUB.polestar.step, STUB.polestar.live = 1, 1');
+  // Rows as the window shows them, done ones included and the na goal left out: the fourth is the boars.
+  assert.equal(polestarReply(vm, 'aim', 'fourth'), "Polestar's arrow now points at: Kill Mottled Boar 3/8.");
+  assert.equal(polestarReply(vm, 'aim', 'thazz'), "Polestar's arrow now points at: Accept Lazy Peons.");
+  assert.equal(polestarReply(vm, 'aim', 'first'), 'Turn in Your Place In The World: nowhere for the arrow to lead (done, or no place known).');
+  assert.equal(polestarReply(vm, 'aim', 'murlocs'), 'No goal in this step matches "murlocs".');
+  // An open tab is selected; another guide opens in a new tab.
+  assert.equal(polestarReply(vm, 'guide', 'mining'), 'Polestar switched to Mining 1-300.');
+  assert.equal(polestarReply(vm, 'guide', 'barrens'), 'Polestar opened The Barrens 12-20.');
+  assert.equal(polestarReply(vm, 'guide', 'stranglethorn'), 'Polestar has no guide called "stranglethorn".');
+  assert.equal(calls(), 'Skip 1, Unskip 1, Prev, Goto 2, AimGoal 1 4, AimGoal 1 3, AimGoal 1 1, SelectTab 2, OpenTab forever/horde/02-barrens');
+});
+
+test('a Polestar command in combat waits until combat ends', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  vm.run('STUB.combat = true');
+  assert.equal(polestarReply(vm, 'skip'), 'In combat: Polestar will do that when combat ends.');
+  assert.equal(vm.num('STUB.polestar.step'), 1);
+  vm.run('STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(vm.num('STUB.polestar.step'), 2);
+  assert.equal(vm.evaluate('STUB.prints[#STUB.prints]'), 'WoW Voice Guide: Polestar skipped step 1. Say "undo skip" to bring it back.');
+});
+
+test('Polestar moments: skipped quests, guide done, route choice, trainer due, out-leveled', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  const fire = code => { vm.run(code + '; STUB.now = STUB.now + 2; STUB.RunTimers()'); const a = announcements(vm); deliverState(vm); return a; };
+  vm.run('Polestar.Fire("STEP_SKIPPED", 1, 2, { { quest = 790, title = "Sarkoth", reason = "closed", text = "No longer offered: you took Sarkoth; part 2" } }); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.deepEqual(announcements(vm), [{ kind: 'pskip', quests: 'Sarkoth (No longer offered: you took Sarkoth, part 2)' }]);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nPolestar skipped: Sarkoth \(No longer offered: you took Sarkoth, part 2\)\n/);
+  deliverState(vm);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_COMPLETED", "forever/horde/orc/01-durotar")'), [{ kind: 'pdone', guide: 'Durotar 1-6' }]);
+  assert.deepEqual(fire(`STUB.polestar.choice = { fromTitle = "Durotar 1-6", options = { { id = "a", title = "The Barrens 12-20", recommended = true }, { id = "b", title = "Silverpine Forest 10-20" } } }
+    Polestar.Fire("ROUTE_CHOICE", "forever/horde/orc/01-durotar")`),
+    [{ kind: 'proute', guide: 'Durotar 1-6', options: 'The Barrens 12-20 (recommended); Silverpine Forest 10-20' }]);
+  assert.deepEqual(fire('Polestar.Fire("TRAIN_DUE", 6, { npc = 3153, npcName = "Frang", map = 1411, x = 42, y = 69 })'), [{ kind: 'ptrain', level: '6', npc: 'Frang', where: 'Durotar' }]);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_OUTLEVELED", "forever/horde/orc/01-durotar", "forever/horde/02-barrens")'),
+    [{ kind: 'plevel', guide: 'Durotar 1-6', next: 'The Barrens 12-20' }]);
+  // Switched off: no more Polestar moments.
+  vm.run('SlashCmdList.WOWCLAUDE("announce polestar off")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=polestar:0'));
+  deliverState(vm);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_COMPLETED", "forever/horde/orc/01-durotar")'), []);
+});
+
+test('/wow-claude polestar shows what the guide sees; dump shows the raw step view and keeps it in saved variables', () => {
+  const vm = polestarVM();
+  vm.run('SlashCmdList.WOWCLAUDE("polestar")');
+  const last = () => vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text');
+  assert.ok(last().startsWith('What the guide sees of Polestar:\n' + POLESTAR_SECTION));
+  vm.run('SlashCmdList.WOWCLAUDE("polestar dump")');
+  const dump = vm.evaluate('WoWClaudeDB.polestarDump');
+  assert.match(dump, /^-- Polestar \?, guide forever\/horde\/orc\/01-durotar, step 1 \(live 1\)\nview = \{\n/);
+  assert.match(dump, /\n {4}\[4\] = \{\n(?:.*\n)*? {6}progress = \{\n {8}cur = 3,\n {8}kind = "count",\n {8}max = 8,\n {6}\},/);
+  assert.match(dump, /\nwaypoint = \{\n {2}f = "e",\n {2}goalIndex = 2,\n/);
+  assert.match(dump, /\ntabs = \{\n(?:.*\n)*\} -- active 1\n/);
+  assert.ok(dump.endsWith('--[[\n' + POLESTAR_SECTION + '\n]]'));
+  // The dump must be valid Lua (it is pasted back to check Polestar's shapes).
+  vm.run('assert((loadstring or load)((WoWClaudeDB.polestarDump:gsub("%-%-%[%[.*%]%]$", ""))))');
 });

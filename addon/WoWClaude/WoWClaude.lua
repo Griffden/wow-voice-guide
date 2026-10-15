@@ -729,6 +729,11 @@ local function ApplyReplies(replies)
 					waypoints = #stops > 1 and stops or nil,
 					items = type(r.items) == "table" and #r.items > 0 and r.items or nil,
 				})
+				-- A Polestar voice command ("skip this step"): Polestar does it here.
+				if type(r.polestar) == "table" and type(r.polestar.action) == "string" then
+					local ok, said = WoWClaude.Guarded("polestar.act", WoWClaude_Polestar.Act, r.polestar.action, r.polestar.arg)
+					if ok and said then AddHistory(c, "system", said) end
+				end
 			elseif r.status == "error" then
 				Finish(c, "system", "Bridge error: " .. tostring(r.text), denied)
 			elseif r.status == "working" then
@@ -965,7 +970,7 @@ local CONTEXT_MAX = 1500 -- bytes of flattened context per reload-mode outbox
 -- section on the bridge; the key "*" clears them all (context off).
 local FS, GS = "\28", "\29"
 local STATE_RECORD_MAX = 1500 -- bytes of sections per record
-local STATE_DELAY = { default = 1.5, quests = 4, quest = 2, prog = 30, gear = 5, loc = 1, npc = 0.3, target = 0.5, spells = 3 }
+local STATE_DELAY = { default = 1.5, quests = 4, quest = 2, prog = 30, gear = 5, loc = 1, npc = 0.3, target = 0.5, spells = 3, polestar = 1 }
 local MOVE_CHECK_SECONDS, MOVE_MIN = 20, 3 -- re-send the position after moving 3 map units
 local DONE_NEW_MAX = 300 -- bytes of turn-ins kept as a delta before the full list is re-sent
 
@@ -1018,6 +1023,7 @@ local function BuildSection(key, out)
 	elseif key == "taxi" then out.taxi = State.Taxi(db and db.taxi)
 	elseif key == "ways" then out.ways = State.Waypoints(TOMTOM_FROM, run.guidePin)
 	elseif key == "gear" then out.gear = State.Gear()
+	elseif key == "polestar" then out.polestar = WoWClaude_Polestar.Section()
 	elseif key == "done" then
 		local ids = State.CompletedIds()
 		if ids then
@@ -1048,7 +1054,7 @@ end
 -- reload-mode outbox (which has no room for separate section records).
 function WoWClaude.GameContext()
 	local out = {}
-	for _, key in ipairs({ "char", "prog", "loc", "ways", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do Guarded("state." .. key, BuildSection, key, out) end
+	for _, key in ipairs({ "char", "prog", "loc", "ways", "polestar", "target", "npc", "quest", "talents", "prof", "gear", "taxi" }) do Guarded("state." .. key, BuildSection, key, out) end
 	local lines = {}
 	for _, key in ipairs(State.ORDER) do
 		if out[key] and out[key] ~= "" then table.insert(lines, out[key]) end
@@ -1145,7 +1151,7 @@ function WoWClaude.SendFullState()
 	local st = StateRun()
 	st.sent = {}
 	st.full = true
-	local keys = { "char", "prog", "loc", "ways", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done", "spells", "train" }
+	local keys = { "char", "prog", "loc", "ways", "polestar", "quest", "quests", "target", "npc", "talents", "prof", "taxi", "gear", "done", "spells", "train" }
 	for _, key in ipairs(keys) do st.dirty[key] = GetTime() end
 	WoWClaude.FlushState(true)
 end
@@ -1273,14 +1279,17 @@ end
 -- (ApplyAnnounceSettings). Nothing is sent in combat: moments that happen
 -- then wait for PLAYER_REGEN_ENABLED and are dropped after a minute.
 
-local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate", "route" }
+local ANNOUNCE_KINDS = { "quest", "level", "zone", "bags", "narrate", "route", "polestar" }
 local ANNOUNCE_STALE = 60
 local BAGS_LOW, BAGS_OK = 2, 5 -- free slots: warn at 2 or fewer, again after 5 or more
 local WORN_LOW, WORN_OK = 20, 50 -- durability percent: warn at 20 or less, again after 50
+-- Polestar's moments (PolestarLink.lua) share the "polestar" switch.
+local POLESTAR_MOMENTS = { pstep = true, pskip = true, pdone = true, proute = true, ptrain = true, plevel = true }
 
 local function AnnounceToggle(kind)
 	if kind == "accept" then return "narrate" end
 	if kind == "repair" then return "bags" end
+	if POLESTAR_MOMENTS[kind] then return "polestar" end
 	return kind
 end
 
@@ -1298,7 +1307,8 @@ local function SendAnnouncement(fields)
 	RefreshStrip()
 end
 
--- kind: quest | level | zone | bags | repair | accept | route; fields: { { key, value }, ... }
+-- kind: quest | level | zone | bags | repair | accept | route | a Polestar
+-- moment (POLESTAR_MOMENTS); fields: { { key, value }, ... }
 function WoWClaude.Announce(kind, fields)
 	if not db or db.settings.mode ~= "pixel" then return end
 	local a = db.settings.announce
@@ -1421,13 +1431,13 @@ function WoWClaude.AnnounceCommand(cmd, rest)
 		run.outbound[db.lastSeq] = { chat = c and c.id or "", cwd = c and c.cwd or "", flags = "ann=" .. table.concat(changed, ","), name = c and c.name or "", text = "", sentAt = GetTime(), stateRec = true }
 		RefreshStrip()
 	end
-	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud", route = "route stop reached and where next" }
+	local names = { quest = "quest objectives complete", level = "level up and new trainer spells", zone = "new zone briefing", bags = "bags nearly full / low durability", narrate = "read accepted quests aloud", route = "route stop reached and where next", polestar = "read Polestar's guide steps aloud as you go" }
 	local lines = { "Spoken announcements (off unless turned on here or in the companion's Settings; never in combat):" }
 	for _, k in ipairs(ANNOUNCE_KINDS) do
 		local state = a[k] == true and "on" or a[k] == false and "off" or "as set in the companion"
 		table.insert(lines, "  " .. k .. " - " .. names[k] .. ": " .. state)
 	end
-	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|route|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
+	table.insert(lines, "/wow-claude announce <quest|level|zone|bags|route|polestar|all> on|off, /wow-claude narrate on|off. Say \"read me this quest\" to hear the selected quest any time.")
 	AddHistory(c, "system", table.concat(lines, "\n"))
 	WoWClaude.Render()
 	WoWClaude.Toggle(true)
@@ -3402,8 +3412,9 @@ local HELP = table.concat({
 	"/wow-claude cd <folder>            compatibility work folder for this chat (normally leave it at default)",
 	"/wow-claude reset                  next message starts a fresh guide conversation",
 	"/wow-claude context [on|off]       what the guide is told about your character and location",
-	"/wow-claude announce <kind> on|off spoken announcements: quest, level, zone, bags, all (off by default)",
+	"/wow-claude announce <kind> on|off spoken announcements: quest, level, zone, bags, route, polestar, all (off by default)",
 	"/wow-claude narrate on|off         read newly accepted quests aloud in the guide voice",
+	"/wow-claude polestar [dump]        what the guide sees of Polestar; dump = its raw step view in a copy box",
 	"/wow-claude mode pixel             no-reload transport (default)",
 	"/wow-claude mode reload            fallback transport: a /reload per step",
 	"/wow-claude resend                 show the strip again if the bridge missed it",
@@ -3522,6 +3533,24 @@ SlashCmdList["WOWCLAUDE"] = function(msg)
 		WoWClaude.Toggle(true)
 	elseif cmd == "announce" or cmd == "narrate" then
 		WoWClaude.AnnounceCommand(cmd, rest)
+	elseif cmd == "polestar" then
+		local P = WoWClaude_Polestar
+		if not P.Ready() then
+			AddHistory(c, "system", "Polestar is not loaded. With it installed, the guide reads its steps, and you can say \"skip this step\", \"go back a step\", \"undo skip\", \"point me at the second goal\" or \"switch to the mining guide\".")
+		elseif rest:lower() == "dump" then
+			-- Kept in saved variables too, so it can be read from disk after a /reload.
+			local text = P.DumpText()
+			db.polestarDump = text
+			WoWClaude.ShowCopy(text)
+			AddHistory(c, "system", "Polestar's step view is in the copy box (and saved in WoWClaudeDB.polestarDump after a /reload).")
+		else
+			local a = s.announce and s.announce.polestar
+			AddHistory(c, "system", "What the guide sees of Polestar:\n" .. P.Section()
+				.. "\n\nSpoken steps: " .. (a == true and "on" or a == false and "off" or "as set in the companion") .. " (/wow-claude announce polestar on|off)."
+				.. "\nSay \"read me the step\", \"skip this step\", \"undo skip\", \"go back a step\", \"back to the current step\", \"point me at the second goal\" or \"switch to the mining guide\". /wow-claude polestar dump shows the raw step view.")
+		end
+		WoWClaude.Render()
+		WoWClaude.Toggle(true)
 	elseif cmd == "mode" then
 		if rest == "pixel" or rest == "reload" then
 			s.mode = rest
@@ -3695,6 +3724,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		run = { outbound = {} }
 		run.lastZone = Try(GetZoneText) -- the zone we log in to is not announced
 		WoWClaude.HookTomTom()
+		Guarded("polestar.hook", WoWClaude_Polestar.Hook)
 		SelfTestSignals()
 		ProcessInbox()
 		if AnyPending() then
@@ -3730,6 +3760,7 @@ ev:SetScript("OnEvent", function(self, event, arg1, ...)
 		C_Timer.After(3, WoWClaude.SayHello)
 	elseif event == "PLAYER_REGEN_ENABLED" then
 		WoWClaude.FlushAnnouncements()
+		Guarded("polestar.combat", WoWClaude_Polestar.AfterCombat)
 		if WoWClaude.reloadAfterCombat then
 			WoWClaude.reloadAfterCombat = nil
 			ReloadUI()
