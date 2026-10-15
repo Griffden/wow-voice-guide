@@ -15,6 +15,15 @@ STUB = {
 
 local function noop() end
 
+-- Secret values, as the client returns in instances and combat: comparing,
+-- measuring, concatenating or indexing one throws. STUB.Secret() makes one.
+local secrets = setmetatable({}, { __mode = "k" })
+local function secretError() error("attempt to use a secret value", 2) end
+local SecretMT = { __lt = secretError, __le = secretError, __len = secretError, __concat = secretError,
+	__index = secretError, __add = secretError, __sub = secretError, __tostring = secretError }
+function STUB.Secret() local v = setmetatable({}, SecretMT); secrets[v] = true; return v end
+function issecretvalue(v) return secrets[v] == true end
+
 local Methods = {}
 local FrameMT = {
 	__index = function(t, k)
@@ -221,6 +230,15 @@ C_Map = {
 	GetPlayerMapPosition = function(mapId, unit) return { x = STUB.posX or 0.452, y = STUB.posY or 0.678 } end,
 	GetMapInfo = function(mapId) return { name = "Duskwood", mapID = mapId } end,
 	SetUserWaypoint = function(point) STUB.waypoint = point end,
+	-- The real one returns a new UiMapPoint: uiMapID and a position vector.
+	GetUserWaypoint = function()
+		local w = STUB.waypoint
+		if w then return { uiMapID = w.mapId, position = { x = w.x, y = w.y } } end
+	end,
+	GetMapChildrenInfo = function(mapId, mapType, all)
+		if mapId == 1415 then return { { mapID = 1458, name = "Undercity" }, { mapID = 1420, name = "Tirisfal Glades" } } end
+		return {}
+	end,
 }
 UiMapPoint = {
 	CreateFromCoordinates = function(mapId, x, y) return { mapId = mapId, x = x, y = y } end,
@@ -258,7 +276,19 @@ function UnitXPMax(unit) return 5000 end
 function GetXPExhaustion() return STUB.rested end
 function IsResting() return STUB.resting end
 function GetBindLocation() return "Darkshire" end
-function IsInInstance() return false, "none" end
+function IsInInstance() if STUB.instance then return true, "party" end return false, "none" end
+function GetInstanceInfo() if STUB.instance then return STUB.instance, "party" end return "Eastern Kingdoms", "none" end
+-- Dungeon entrances on the world map: STUB.entrances[mapId] = { { name, x, y } }.
+STUB.entrances = {}
+C_EncounterJournal = {
+	GetDungeonEntrancesForMap = function(mapId)
+		local out = {}
+		for _, e in ipairs(STUB.entrances[mapId] or {}) do
+			table.insert(out, { name = e[1], position = { x = e[2], y = e[3] }, journalInstanceID = 1 })
+		end
+		return out
+	end,
+}
 -- The Forever client has the modern talent API only (no GetNumTalentTabs).
 C_SpecializationInfo = {
 	GetSpecialization = function() return 1 end,
@@ -284,9 +314,37 @@ C_Traits = {
 		for _, n in pairs(TRAIT_NODES) do if n.def == def then return { spellID = n.spell } end end
 	end,
 }
+-- Spellbook: two skill lines; the last entry is a "future" spell (not learned).
+Enum = Enum or {}
+Enum.SpellBookSpellBank = { Player = 0, Pet = 1 }
+Enum.SpellBookItemType = { None = 0, Spell = 1, FutureSpell = 2, PetAction = 3, Flyout = 4 }
+local BOOK = {
+	{ name = "General", items = { 6603, 2764 } },
+	{ name = "Marksmanship", items = { 75, 1978, 3044, 14281 }, future = 14281 },
+}
 C_SpellBook = {
 	GetCurrentLevelSpells = function(level) return STUB.levelSpells and STUB.levelSpells[level] end,
+	GetNumSpellBookSkillLines = function() return #BOOK end,
+	GetSpellBookSkillLineInfo = function(line)
+		local offset = 0
+		for i = 1, line - 1 do offset = offset + #BOOK[i].items end
+		return { name = BOOK[line].name, itemIndexOffset = offset, numSpellBookItems = #BOOK[line].items }
+	end,
+	GetSpellBookItemInfo = function(index, bank)
+		for _, line in ipairs(BOOK) do
+			if index <= #line.items then
+				local id = line.items[index]
+				return { spellID = id, itemType = id == line.future and Enum.SpellBookItemType.FutureSpell or Enum.SpellBookItemType.Spell }
+			end
+			index = index - #line.items
+		end
+	end,
 }
+-- Class trainer window, driven by STUB.trainer = { { name, subText, kind, cost }, ... }.
+function IsTradeskillTrainer() return STUB.tradeTrainer or false end
+function GetNumTrainerServices() return STUB.trainer and #STUB.trainer or 0 end
+function GetTrainerServiceInfo(i) local s = STUB.trainer[i]; return s[1], s[2], s[3] end
+function GetTrainerServiceCost(i) return STUB.trainer[i][4] end
 C_Spell = {
 	GetSpellName = function(id)
 		for _, n in pairs(TRAIT_NODES) do if n.spell == id then return n.name end end
@@ -330,7 +388,7 @@ function GetTaxiMapID() return 1414 end
 C_TaxiMap = {
 	GetAllTaxiNodes = function(mapId) return STUB.taxiNodes or {} end,
 }
-Enum = { FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 } }
+Enum.FlightPathState = { Current = 0, Reachable = 1, Unreachable = 2 }
 function GetInventoryItemLink(unit, slot) return STUB.gear and STUB.gear[slot] and STUB.gear[slot].link end
 function GetInventoryItemDurability(slot)
 	local g = STUB.gear and STUB.gear[slot]
@@ -345,6 +403,7 @@ ITEM_QUALITY2_DESC = "Uncommon"
 C_Item = {
 	GetDetailedItemLevelInfo = function(link) return STUB.ilvl and STUB.ilvl[link] end,
 	GetItemInfo = function(link)
+		if link == 2140 then link = "item:2140" end
 		if tostring(link):find("^item:2140") then return "Fine Longsword", link, 2, 19, 14, "Weapon", "One-Handed Swords" end
 	end,
 }
@@ -352,4 +411,165 @@ function print(...)
 	local parts = {}
 	for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
 	table.insert(STUB.prints, table.concat(parts, " "))
+end
+
+-- TomTom as far as the add-on uses it (v4.3 API): not installed until a test
+-- calls STUB.InstallTomTom(). TomTom.list holds the waypoints in order.
+function STUB.InstallTomTom()
+	local tt = { list = {}, waypoints = {} }
+	function tt:WaypointExists(m, x, y, title)
+		for _, w in ipairs(self.list) do
+			if w[1] == m and w[2] == x and w[3] == y and w.title == title then return true end
+		end
+		return false
+	end
+	function tt:DefaultCallbacks(opts)
+		return { minimap = {}, world = {}, distance = { [15] = function() STUB.tomtomPings = (STUB.tomtomPings or 0) + 1 end } }
+	end
+	function tt:AddWaypoint(m, x, y, opts)
+		local uid = { m, x, y, title = opts.title, from = opts.from or "?" }
+		for k, v in pairs(opts) do if uid[k] == nil then uid[k] = v end end
+		table.insert(self.list, uid)
+		self.waypoints[m] = self.waypoints[m] or {}
+		self.waypoints[m][tostring(uid)] = uid
+		return uid
+	end
+	function tt:RemoveWaypoint(uid)
+		for i, w in ipairs(self.list) do if w == uid then table.remove(self.list, i) break end end
+		if self.waypoints[uid[1]] then self.waypoints[uid[1]][tostring(uid)] = nil end
+		if self.arrow == uid then self.arrow = nil end
+	end
+	function tt:SetCrazyArrow(uid, dist, title) self.arrow, self.arrowTitle = uid, title end
+	TomTom = tt
+	return tt
+end
+
+-- The player comes within `yards` of a TomTom waypoint: like TomTom, the
+-- callback of the smallest circle they are inside runs.
+function STUB.TomTomDistance(uid, yards)
+	local circles = uid.callbacks and uid.callbacks.distance or {}
+	local best
+	for range in pairs(circles) do
+		if yards <= range and (not best or range < best) then best = range end
+	end
+	if best then circles[best]("distance", uid, best, yards, nil) end
+end
+
+-- Polestar as far as the add-on uses it (its docs/ARCHITECTURE.md and
+-- Core/Engine.lua: GetStepView's view, groups and focus, the waypoint, tabs,
+-- the message bus): not installed until a test calls STUB.InstallPolestar().
+-- STUB.polestar is the engine state a test changes; ps.calls lists the
+-- Engine calls that change something.
+local function PolestarViews()
+	return {
+		[1] = {
+			index = 1, title = "Valley of Trials", status = "current", focus = 1,
+			goals = {
+				{ index = 1, group = 1, t = "turnin", text = "Turn in Your Place In The World", detail = "at Gornek", status = "done", npcName = "Gornek" },
+				{ index = 2, group = 1, t = "accept", text = "Accept Cutting Teeth", detail = "from Gornek", status = "active", npcName = "Gornek" },
+				{ index = 3, group = 2, t = "accept", text = "Accept Lazy Peons", detail = "from Foreman Thazz'ril", status = "active", npcName = "Foreman Thazz'ril" },
+				{ index = 4, group = 3, t = "kill", text = "Kill Mottled Boar", detail = "for Cutting Teeth", status = "active", progress = { cur = 3, max = 8, kind = "count" } },
+				{ index = 5, group = 3, t = "collect", text = "Collect Scorpid Worker Tail", detail = "for Sting of the Scorpid", status = "na" },
+				{ index = 6, group = 3, t = "note", text = "Loot everything; vendor at the den", status = "active", optional = true },
+			},
+			groups = {
+				{ kind = "npc", npc = 3143, name = "Gornek", map = 1411, x = 42.1, y = 68.3, f = "e", goals = { 1, 2 }, done = false, pending = 1 },
+				{ kind = "npc", npc = 6786, name = "Foreman Thazz'ril", map = 1411, x = 44.6, y = 70.0, goals = { 3 }, done = false, pending = 1 },
+				{ kind = "here", goals = { 4, 5, 6 }, done = false, pending = 1 },
+			},
+		},
+		[2] = {
+			index = 2, title = "Razor Hill", status = "current", focus = 1,
+			goals = { { index = 1, group = 1, t = "accept", text = "Accept Vanquish the Betrayers", detail = "from Gar'Thok", status = "active", npcName = "Gar'Thok" } },
+			groups = { { kind = "npc", name = "Gar'Thok", goals = { 1 }, done = false, pending = 1 } },
+		},
+	}
+end
+
+function STUB.InstallPolestar()
+	local ps = {
+		handlers = {}, calls = {}, skipped = {},
+		guides = {
+			{ id = "forever/horde/orc/01-durotar", title = "Durotar 1-6", stepCount = 40 },
+			{ id = "forever/professions/mining", title = "Mining 1-300", stepCount = 20 },
+			{ id = "forever/horde/02-barrens", title = "The Barrens 12-20", stepCount = 55 },
+		},
+		tabs = { { id = "forever/horde/orc/01-durotar", step = 1 }, { id = "forever/professions/mining", step = 3 } },
+		active = 1, step = 1, live = 1, done = 4,
+		views = PolestarViews(),
+		waypoint = { map = 1411, x = 42.1, y = 68.3, f = "e", label = "Accept Cutting Teeth", stepIndex = 1, goalIndex = 2, kind = "accept" },
+	}
+	STUB.polestar = ps
+	local function guideById(id)
+		for _, g in ipairs(ps.guides) do if g.id == id then return g end end
+	end
+	local function fire(msg, ...)
+		for _, fn in ipairs(ps.handlers[msg] or {}) do fn(...) end
+	end
+	local Engine = {}
+	function Engine.GetGuide() local t = ps.tabs[ps.active]; return t and guideById(t.id) end
+	function Engine.GetStepCount() local g = Engine.GetGuide(); return g and g.stepCount or 0 end
+	function Engine.GetProgress() return ps.done, Engine.GetStepCount() end
+	function Engine.GetStepIndex() return ps.step end
+	function Engine.GetLiveStep() return ps.live end
+	function Engine.GetStepView(i) local v = ps.views[i]; if v then v.skipped = ps.skipped[i] or false; v.live = ps.live end; return v end
+	function Engine.GetWaypoint() return ps.waypoint end
+	function Engine.GetTabs()
+		local out = {}
+		for i, t in ipairs(ps.tabs) do
+			local g = guideById(t.id)
+			out[i] = { guideId = t.id, title = g.title, stepIndex = t.step, stepCount = g.stepCount, complete = false }
+		end
+		return out, ps.active
+	end
+	function Engine.PendingRouteChoice() return ps.pendingFrom end
+	function Engine.GetRouteChoice(from) return ps.choice end
+	function Engine.Skip()
+		if not ps.step then return nil end
+		local s = ps.step
+		table.insert(ps.calls, "Skip " .. s)
+		ps.skipped[s] = true
+		ps.step, ps.live = s + 1, s + 1
+		fire("STEP_CHANGED", ps.step)
+		fire("PLAYER_SKIPPED_STEP", Engine.GetGuide().id, s)
+		return s
+	end
+	function Engine.Unskip(i)
+		table.insert(ps.calls, "Unskip " .. tostring(i))
+		if not ps.skipped[i] then return false end
+		ps.skipped[i] = nil
+		ps.step, ps.live = i, i
+		fire("STEP_CHANGED", i)
+		return true
+	end
+	function Engine.Prev() table.insert(ps.calls, "Prev"); ps.step = ps.step - 1; fire("STEP_CHANGED", ps.step) end
+	function Engine.Next() table.insert(ps.calls, "Next"); ps.step = ps.step + 1; fire("STEP_CHANGED", ps.step) end
+	function Engine.Goto(i) table.insert(ps.calls, "Goto " .. i); ps.step = i; fire("STEP_CHANGED", i) end
+	function Engine.AimGoal(s, g)
+		table.insert(ps.calls, "AimGoal " .. s .. " " .. g)
+		if s ~= ps.step then return false end
+		return ps.views[s].goals[g].status ~= "done"
+	end
+	function Engine.SelectTab(i) table.insert(ps.calls, "SelectTab " .. i); ps.active = i; fire("GUIDE_CHANGED", ps.tabs[i].id) end
+	function Engine.OpenTab(id)
+		table.insert(ps.calls, "OpenTab " .. id)
+		if #ps.tabs >= 6 then return nil end
+		table.insert(ps.tabs, { id = id, step = 1 })
+		ps.active = #ps.tabs
+		return ps.active
+	end
+	local Guides = {}
+	function Guides.Get(id) return guideById(id) end
+	function Guides.List() return ps.guides end
+	-- Era frame "e": a visible shift, so a test can tell the conversion ran.
+	local Compat = {}
+	function Compat.MapName(map) return map == 1411 and "Durotar" or nil end
+	function Compat.MapToWorld(map, x, y, f) return 1, x * 10, y * 10 end
+	function Compat.WorldToMap(c, wx, wy, map) return wx / 10 + 0.5, wy / 10 - 0.5 end
+	Polestar = {
+		Engine = Engine, Guides = Guides, Compat = Compat,
+		On = function(msg, fn) ps.handlers[msg] = ps.handlers[msg] or {}; table.insert(ps.handlers[msg], fn); return fn end,
+		Fire = fire,
+	}
+	return ps
 end

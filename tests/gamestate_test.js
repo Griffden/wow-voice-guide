@@ -88,6 +88,11 @@ test('the model context keeps a fixed order, puts what the question needs first,
   const gear = G.assembleContext(s, 'is my gear ok, do I need to repair?', { now, maxChars: 1500 });
   assert.match(gear, /Bags: 2 of 16/);
   assert.doesNotMatch(gear, /Specialization/);
+  // Waypoints: first when the question is about them, rendered after the location.
+  G.applySections(s, G.encodeSections([['ways', 'TomTom waypoints (1): Bank (Stormwind City 62.4, 71.8)']]), { now });
+  assert.match(G.assembleContext(s, 'what is this waypoint I set?', { now, maxChars: 1500 }), /TomTom waypoints \(1\): Bank/);
+  const withWays = G.assembleContext(s, 'where do I go', { now, maxChars: 10000 });
+  assert.ok(withWays.indexOf('Location:') < withWays.indexOf('TomTom waypoints') && withWays.indexOf('TomTom waypoints') < withWays.indexOf('Money:'), 'right after the location');
   // An old dialog drops out.
   assert.doesNotMatch(G.assembleContext(s, 'hi', { now: now + 3600 * 1000 }), /NPC dialog/);
 });

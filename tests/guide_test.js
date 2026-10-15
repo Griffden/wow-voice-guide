@@ -14,6 +14,11 @@ const WOWHEAD = {
     { type: 5, id: 1861, name: 'Mirror Lake', typeName: 'Quest', side: 1, pinFooterText: 'Level: 10', pinBreadcrumb: ['Classes', 'Mage'], pinDescription: 'Go to the base of the waterfall at Mirror Lake, southwest of the Stormwind gates.' },
   ] },
   'https://nether.wowhead.com/forever/tooltip/npc/2439': { name: 'Major Samuelson', tooltip: '<table><tr><td>Major Samuelson</td></tr><tr><td>Stormwind City Guard</td></tr></table>', map: { zone: 1519, coords: { 0: [[72.4, 16]] } } },
+  'https://nether.wowhead.com/forever/tooltip/npc/1344': { name: 'Earthseer Farsen', tooltip: 'Earthseer Farsen', map: { zone: 1, coords: { 0: [[64.8, 58.4]] } } },
+  'https://nether.wowhead.com/forever/tooltip/npc/1356': { name: 'Thom Filch', tooltip: 'Thom Filch', map: { zone: 1537, coords: { 0: [[32.6, 44.6]] } } },
+  'https://www.wowhead.com/forever/search/suggestions-template?q=Golemheart': { results: [
+    { type: 3, id: 190501, name: 'Golemheart Stave', typeName: 'Item', pinDescription: 'Two-Hand Staff' },
+  ] },
 };
 
 // Serves Wowhead JSON from the table above and OpenAI responses in order.
@@ -93,13 +98,14 @@ test('tool errors go back to the model instead of failing the answer', async () 
   } finally { net.restore(); }
 });
 
-test('Classic and general answers are labeled; game-context answers are not', async () => {
+test('Classic and general answers are labeled; game-context and lore answers are not', async () => {
   const net = fakeNetwork([
     [{ type: 'web_search_call', action: { type: 'search', sources: [{ url: 'https://www.wowhead.com/classic/quest=963' }] } },
       { type: 'message', content: [{ type: 'output_text', text: '{"speech":"Kill Anaya in the Ameth\'Aran ruins.","basis":"classic"}',
         annotations: [{ type: 'url_citation', title: 'For Love Eternal - Classic', url: 'https://www.wowhead.com/classic/quest=963' }] }] }],
     say({ speech: 'Rut\'theran Village has the boat.', basis: 'general' }),
     say({ speech: 'Your character is Griffden, level 15.', basis: 'game' }),
+    say({ speech: 'They helped reclaim Stormwind from the Orcish Horde after the First War.', basis: 'lore' }),
   ]);
   try {
     const classic = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'How do I do the Anaya quest?' });
@@ -111,6 +117,10 @@ test('Classic and general answers are labeled; game-context answers are not', as
     assert.equal(game.speech, 'Your character is Griffden, level 15.');
     assert.equal(game.display, 'Your character is Griffden, level 15.');
     assert.deepEqual(game.sources, []);
+    const lore = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Who did they help reclaim Stormwind from?' });
+    assert.equal(lore.speech, 'They helped reclaim Stormwind from the Orcish Horde after the First War.', 'lore is the same in every edition');
+    assert.equal(lore.lookup.basis, 'lore');
+    assert.match(net.requests[0].instructions, /"lore" for Warcraft story, history and characters/);
   } finally { net.restore(); }
 });
 
@@ -172,6 +182,124 @@ test('a looked-up NPC the answer names becomes a waypoint even if the model omit
     assert.equal(answer.waypoint.mapId, 1453);
     assert.equal(answer.waypoint.label, 'Major Samuelson');
   } finally { net.restore(); }
+});
+
+test('a route answer becomes numbered steps with areas, and every looked-up stop becomes a waypoint in order', async () => {
+  const net = fakeNetwork([
+    [{ type: 'function_call', call_id: 'c1', name: 'wowhead_lookup', arguments: '{"type":"npc","id":1344}' },
+      { type: 'function_call', call_id: 'c2', name: 'wowhead_lookup', arguments: '{"type":"npc","id":1356}' }],
+    say({ basis: 'forever', speech: 'Three stops, starting in Dun Morogh with Earthseer Farsen. The full list is in your window.', steps: [
+      // Coordinates from the lookup, with its url: kept.
+      { do: 'Get Old Ironforge Incursion from Earthseer Farsen', label: 'Earthseer Farsen', where: 'Dun Morogh, east of Kharanos', zone: 'Dun Morogh', x: 64.8, y: 58.4, sourceUrl: 'https://www.wowhead.com/forever/npc=1344' },
+      // Invented coordinates, no source: dropped, and the step stays words only.
+      { do: 'Kill Dark Iron Spies for the Dark Iron Map', where: "around Ironbeard's Compound", zone: 'Dun Morogh', x: 77.8, y: 61 },
+      // No coordinates given, but the looked-up NPC it names has them, on Ironforge's own map.
+      { do: 'Take Important Heirlooms from Thom Filch', label: 'Thom Filch' },
+    ] }),
+  ]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: 'Location: Darkshore\nPosition: 36.0, 45.0 (map 1439)', text: 'Give me waypoints for the Hall of Thanes quests' });
+    assert.match(net.requests[0].instructions, /never give bare coordinates/i);
+    assert.equal(answer.speech, 'Three stops, starting in Dun Morogh with Earthseer Farsen. The full list is in your window.', 'the steps are not spoken');
+    assert.match(answer.display, /\n\n1\. Get Old Ironforge Incursion from Earthseer Farsen - Dun Morogh, east of Kharanos \(64\.8, 58\.4\)\n2\. Kill Dark Iron Spies for the Dark Iron Map - around Ironbeard's Compound\n3\. Take Important Heirlooms from Thom Filch - west Ironforge \(32\.6, 44\.6\)\n\nSources:/);
+    assert.deepEqual(answer.waypoints, [
+      { mapId: 1426, x: 0.648, y: 0.584, label: 'Earthseer Farsen' },
+      { mapId: 1455, x: 0.326, y: 0.446, label: 'Thom Filch' },
+    ]);
+    assert.deepEqual(answer.waypoint, answer.waypoints[0], 'older add-ons still get the first stop');
+  } finally { net.restore(); }
+});
+
+test('stops the model only web-searched are placed by their NPC name: quest database first, then Wowhead', async () => {
+  WOWHEAD['https://www.wowhead.com/forever/search/suggestions-template?q=Thom%20Filch'] = { results: [
+    { type: 1, id: 1356, name: 'Thom Filch', typeName: 'NPC' },
+  ] };
+  const net = fakeNetwork([
+    [{ type: 'web_search_call', action: { type: 'search', sources: [] } }, ...say({ basis: 'forever', speech: 'Three stops.', steps: [
+      { do: 'Turn in Remember That I Love You to Orphan Matron Nightingale', label: 'Orphan Matron Nightingale', where: 'Stormwind, the Cathedral District orphanage' },
+      { do: 'Take Important Heirlooms from Thom Filch', label: 'Thom Filch', where: 'Ironforge, the Forlorn Cavern' },
+      { do: 'Enter the dungeon', label: 'Nobody Of That Name' },
+    ] })],
+  ]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Best route for the Ruins of Lordaeron quests?' });
+    assert.equal(answer.lookup.toolCalls, 0, 'the model looked nothing up itself');
+    assert.deepEqual(answer.waypoints, [
+      { mapId: 1453, x: 0.563, y: 0.54, label: 'Orphan Matron Nightingale' },
+      { mapId: 1455, x: 0.326, y: 0.446, label: 'Thom Filch' },
+      { place: 'Nobody Of That Name', label: 'Nobody Of That Name' },
+    ], 'a name found nowhere goes by name: the add-on keeps it only for a dungeon it knows');
+    assert.match(answer.display, /3\. Enter the dungeon$/, 'an unknown name stays words only');
+  } finally { net.restore(); }
+});
+
+test('a stop inside a dungeon goes to the add-on as the dungeon name, for its entrance', async () => {
+  const net = fakeNetwork([say({ basis: 'forever', speech: 'Two stops.', steps: [
+    { do: 'Speak with Captain Truman inside for Abominable Creatures', label: 'Captain Truman', instance: 'Ruins of Lordaeron' },
+    { do: 'Turn in to Orphan Matron Nightingale', label: 'Orphan Matron Nightingale' },
+  ] })]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Route for the Ruins of Lordaeron quests?' });
+    assert.match(net.requests[0].instructions, /"instance" to the name of the dungeon/);
+    assert.deepEqual(answer.waypoints, [
+      { instance: 'Ruins of Lordaeron', label: 'Captain Truman' },
+      { mapId: 1453, x: 0.563, y: 0.54, label: 'Orphan Matron Nightingale' },
+    ]);
+    assert.match(answer.display, /1\. Speak with Captain Truman inside for Abominable Creatures - inside Ruins of Lordaeron \(waypoint at the entrance\)\n/);
+  } finally { net.restore(); }
+});
+
+test('travel legs named only by place go to the add-on by name, and a dungeon entered gets its entrance', async () => {
+  const net = fakeNetwork([say({ basis: 'forever', speech: 'Three travel stops.', steps: [
+    { do: 'Walk north from Southshore toward Tarren Mill', label: 'Tarren Mill', where: 'Hillsbrad Foothills, north of Southshore' },
+    { do: 'Head to the ruins above Undercity and enter the dungeon', label: 'Ruins of Lordaeron', where: 'Tirisfal Glades, in the ruins above Undercity' },
+  ] })]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Take me to the Ruins of Lordaeron' });
+    assert.match(net.requests[0].instructions, /or a step that enters one, set "instance"/);
+    assert.deepEqual(answer.waypoints, [
+      { place: 'Tarren Mill', label: 'Tarren Mill' },
+      { place: 'Ruins of Lordaeron', label: 'Ruins of Lordaeron' },
+    ]);
+    assert.match(answer.display, /1\. Walk north from Southshore toward Tarren Mill - Hillsbrad Foothills, north of Southshore\n2\. /, 'no made-up area or coordinates');
+    const lua = require('../bridge/protocol').luaTable('WoWClaude_SlotData', [{ chat: 'c', id: 1, status: 'done', text: 't', waypoint: answer.waypoint, waypoints: answer.waypoints }], { now: 1 });
+    assert.ok(lua.includes('waypoints = { { place = "Tarren Mill", label = "Tarren Mill" }, { place = "Ruins of Lordaeron", label = "Ruins of Lordaeron" } },'));
+  } finally { net.restore(); }
+});
+
+test('items the answer names are sent with ids only when a Wowhead result returned them', async () => {
+  const net = fakeNetwork([
+    [{ type: 'function_call', call_id: 'c1', name: 'wowhead_search', arguments: '{"query":"Golemheart"}' }],
+    say({ basis: 'forever', speech: 'Go for the Golemheart Stave and the Aetherwisp Bracers.', items: [{ name: 'Golemheart Stave', id: 190501 }, { name: 'Aetherwisp Bracers', id: 999 }] }),
+  ]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Best items in Hall of Thanes?' });
+    assert.deepEqual(answer.items, [{ id: 190501, name: 'Golemheart Stave' }]);
+  } finally { net.restore(); }
+});
+
+test('items the model found by web search are looked up on Wowhead by exact name', async () => {
+  WOWHEAD['https://www.wowhead.com/forever/search/suggestions-template?q=Coldspire%20Staff'] = { results: [
+    { type: 3, id: 271215, name: 'Coldspire Staff', typeName: 'Item' },
+  ] };
+  WOWHEAD['https://www.wowhead.com/forever/search/suggestions-template?q=Frostbane%20Treads'] = { results: [
+    { type: 3, id: 271214, name: 'Rotmender\'s Treads', typeName: 'Item' },
+  ] };
+  const net = fakeNetwork([
+    [{ type: 'web_search_call', action: { type: 'search', sources: [] } }, ...say({ basis: 'forever', speech: 'Prioritize the Coldspire Staff; Frostbane Treads are another upgrade.',
+      items: [{ name: 'Coldspire Staff' }, { name: 'Frostbane Treads' }] })],
+  ]);
+  try {
+    const answer = await Providers.requestGuideAnswer(OPENAI, { context: '', text: 'Best items in the Ruins of Lordaeron?' });
+    assert.match(net.requests[0].instructions, /the game looks up the rest by name/);
+    assert.deepEqual(answer.items, [{ id: 271215, name: 'Coldspire Staff' }], 'a name Wowhead has no item for stays words only');
+  } finally { net.restore(); }
+});
+
+test('compassArea names the part of a map a point is in', () => {
+  assert.equal(Providers.compassArea('Dun Morogh', 0.8, 0.2), 'north-east Dun Morogh');
+  assert.equal(Providers.compassArea('Ironforge', 0.5, 0.5), 'central Ironforge');
+  assert.equal(Providers.compassArea('', 0.1, 0.5), 'west part of the map');
 });
 
 test('non-OpenAI presets still get the quest-log lookup in their prompt', async () => {

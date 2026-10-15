@@ -4,8 +4,10 @@
 ## Author: WoW Voice Guide contributors; transport by chelinho139
 ## Version: 0.1.0
 ## SavedVariables: WoWClaudeDB
+## OptionalDeps: Polestar, TomTom
 
 Codec.lua
 GameState.lua
+PolestarLink.lua
 Inbox.lua
 WoWClaude.lua

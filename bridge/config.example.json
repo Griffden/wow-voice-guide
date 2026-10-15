@@ -67,7 +67,9 @@
     "level": false,
     "zone": false,
     "bags": false,
-    "narrate": false
+    "narrate": false,
+    "route": false,
+    "polestar": false
   },
   "gameContext": true,
   "pollMs": 750,

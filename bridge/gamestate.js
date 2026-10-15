@@ -18,6 +18,10 @@ const SECTIONS = Object.freeze([
   { key: 'legacy', weight: 100 },
   { key: 'char', weight: 100 },
   { key: 'loc', weight: 95 },
+  { key: 'ways', weight: 40 },
+  // Polestar's current step (addon/WoWClaude/PolestarLink.lua), when the
+  // player follows its guide: what "what's next?" is about.
+  { key: 'polestar', weight: 88 },
   { key: 'prog', weight: 50 },
   { key: 'target', weight: 70 },
   { key: 'npc', weight: 75 },
@@ -40,6 +44,8 @@ const BOOSTS = Object.freeze({
   prog: /\b(money|gold|silver|xp|experience|rested|level(?:ing)?|ding)\b/,
   char: /\b(hearth(?:stone)?|home|bind)\b/,
   quest: /\b(quest|objective|turn in|where (?:do i|should i) go|next|task)\b/,
+  ways: /\b(waypoints?|way ?points?|markers?|pins?|arrow|tomtom|marked)\b/,
+  polestar: /\b(polestar|guide|steps?|next|skip(?:ped)?|route|arrow|what (?:do|should) i do|where (?:do|should) i go)\b/,
 });
 
 function newStore() {
@@ -112,17 +118,32 @@ function decodeIds(text, into = new Set()) {
   return into;
 }
 
-function completedQuestIds(store) {
-  const ids = new Set();
+// A chunked id list: "<key>" says "N ... in K chunks", "<key>.1".."<key>.K" hold
+// the ids. Returns null when the add-on never sent the list.
+function chunkedIds(store, key) {
   const sections = (store && store.sections) || {};
-  const summary = sections.done && sections.done.text.match(/in (\d+) chunks/);
+  const ids = new Set();
+  const summary = sections[key] && sections[key].text.match(/in (\d+) chunks/);
   const chunks = summary ? Number(summary[1]) : Infinity;
-  for (const [key, value] of Object.entries(sections)) {
-    const m = key.match(/^done\.(\d+)$/);
-    if (m && Number(m[1]) <= chunks) decodeIds(value.text, ids);
+  const pattern = new RegExp(`^${key}\\.(\\d+)$`);
+  let found = !!sections[key];
+  for (const [k, value] of Object.entries(sections)) {
+    const m = k.match(pattern);
+    if (m && Number(m[1]) <= chunks) { decodeIds(value.text, ids); found = true; }
   }
+  return found ? ids : null;
+}
+
+function completedQuestIds(store) {
+  const ids = chunkedIds(store, 'done') || new Set();
+  const sections = (store && store.sections) || {};
   if (sections['done.new']) decodeIds(sections['done.new'].text, ids);
   return ids;
+}
+
+// Spell ids in the player's spellbook, or null when not reported.
+function knownSpellIds(store) {
+  return chunkedIds(store, 'spells');
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +255,6 @@ function summary(store) {
 module.exports = {
   FS, GS, SECTIONS,
   newStore, parseSections, encodeSections, applySections, setLegacyContext,
-  decodeIds, completedQuestIds, playerInfo, questLogIds, sectionText,
+  decodeIds, completedQuestIds, knownSpellIds, playerInfo, questLogIds, sectionText,
   assembleContext, summary,
 };

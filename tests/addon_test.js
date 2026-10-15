@@ -33,7 +33,7 @@ function newVM() {
   };
   const num = (expr) => Number(evaluate(expr));
   run(fs.readFileSync(path.join(__dirname, 'wow_stub.lua'), 'utf8'));
-  for (const f of ['Codec.lua', 'GameState.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
+  for (const f of ['Codec.lua', 'GameState.lua', 'PolestarLink.lua', 'Inbox.lua', 'WoWClaude.lua']) run(fs.readFileSync(path.join(ADDON, f), 'utf8'), 'WoWClaude');
   return { run, evaluate, num };
 }
 
@@ -184,6 +184,9 @@ test('after the hello, every game state section goes out in section records, the
   assert.equal(sections.target, '', 'empty sections go out too, so the bridge drops stale ones');
   assert.equal(sections.done, '7 completed in 1 chunks');
   assert.equal(sections['done.1'], '1~2,2,2~1,lj', 'runs of ids, base 36 deltas');
+  assert.equal(sections.spells, '5 known in 1 chunks', 'the spellbook without its future spell');
+  assert.deepEqual([...require('../bridge/gamestate').decodeIds(sections['spells.1'])], [75, 1978, 2764, 3044, 6603]);
+  assert.equal(sections.train, undefined, 'no trainer visited yet');
   // Delivered: the records leave the strip after a few seconds on screen.
   deliverState(vm);
   assert.equal(stateOnStrip(vm).records.length, 0);
@@ -200,6 +203,18 @@ test('after the hello, every game state section goes out in section records, the
   vm.run('STUB.posX = 0.2; STUB.now = STUB.now + 21; STUB.Tick(); STUB.RunTimers(); STUB.Tick()');
   next = stateOnStrip(vm);
   assert.match(next.sections.loc, /Position: 20\.0, 67\.8/);
+  deliverState(vm);
+  // A class trainer window: what is still to learn, with prices; learned spells left out.
+  vm.run(`STUB.trainer = { { "Arcane Shot", "Rank 2", "available", 600 }, { "Serpent Sting", "Rank 1", "used", 100 },
+    { "Wing Clip", "Rank 1", "unavailable", 1200 }, { "Track Humanoids", "", "available", 1000 } }
+    STUB.FireEvent("TRAINER_SHOW"); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  next = stateOnStrip(vm);
+  assert.deepEqual(Object.keys(next.sections), ['train']);
+  assert.equal(next.sections.train, 'Arcane Shot|2|600;Wing Clip|1|1200;Track Humanoids|0|1000');
+  deliverState(vm);
+  // A profession trainer is not a class trainer.
+  vm.run('STUB.tradeTrainer = true; STUB.trainer = { { "Skinning", "", "available", 10 } }; STUB.FireEvent("TRAINER_SHOW"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(stateOnStrip(vm).records.length, 0);
 });
 
 test('a question goes out right behind the state it needs, and context off clears the bridge', () => {
@@ -311,6 +326,28 @@ test('NPC dialogs, the target, flight paths, gear and turn-ins become sections a
   assert.equal(s['done.new'], '1q');
   assert.equal(s['done.1'], undefined);
   assert.equal(vm.evaluate('STUB.healthRead'), null, 'no health was ever read');
+});
+
+test('in a dungeon, secret target values and a failing section neither throw nor stop the other sections', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  deliverState(vm);
+  // Instance mobs: name, level, reaction and GUID come back secret.
+  vm.run(`STUB.target = { name = STUB.Secret(), level = STUB.Secret(), reaction = STUB.Secret(), guid = STUB.Secret(), creatureType = "Humanoid" }
+    STUB.FireEvent("PLAYER_TARGET_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  assert.equal(vm.evaluate('WoWClaudeDB.errorLog'), null, 'secret values are treated as unavailable, not errors');
+  // A section whose builder throws is logged once with a count; the others still go out.
+  vm.run(`WoWClaude_State.Gear = function() error("gear read rejected") end
+    for i = 1, 3 do STUB.FireEvent("PLAYER_EQUIPMENT_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers() end
+    STUB.target = { name = "Dark Iron Spy", level = 22, reaction = 2 }
+    STUB.FireEvent("PLAYER_TARGET_CHANGED"); STUB.FireEvent("PLAYER_EQUIPMENT_CHANGED"); STUB.now = STUB.now + 6; STUB.RunTimers()`);
+  assert.equal(stateOnStrip(vm).sections.target, 'Target: Dark Iron Spy, level 22, hostile');
+  assert.equal(vm.num('#WoWClaudeDB.errorLog'), 1);
+  assert.equal(vm.evaluate('WoWClaudeDB.errorLog[1].where'), 'state.gear');
+  assert.equal(vm.num('WoWClaudeDB.errorLog[1].count'), 4);
+  assert.match(vm.evaluate('WoWClaudeDB.errorLog[1].msg'), /gear read rejected/);
 });
 
 test('completed quest ids compress into runs and split into chunks that decode on their own', () => {
@@ -542,6 +579,241 @@ test('one in-game voice action carries the voice flag, replaces the placeholder 
   vm.run('WoWClaude.SetWaypoint(WoWClaudeDB.chats[1].history[2].waypoint)');
   assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1431');
   assert.equal(vm.evaluate('STUB.superTrackedWaypoint'), 'true');
+});
+
+test('a route answer shows a button per stop, sets them in order as the player arrives, and item buttons link the item', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end
+    function Click(pattern) local b = FindButton(pattern); b.scripts.OnClick(b) end`);
+  vm.run('WoWClaude.Send("Give me waypoints for each one")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three stops.",
+    waypoint = { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" },
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { mapId = 1431, x = 0.2, y = 0.5, label = "Bravo" }, { mapId = 1431, x = 0.3, y = 0.5, label = "Charlie" } },
+    items = { { id = 2140, name = "Fine Longsword" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.num('#WoWClaudeDB.chats[1].history[2].waypoints'), 3);
+  assert.equal(vm.num('WoWClaudeDB.chats[1].history[2].items[1].id'), 2140);
+  for (const label of ['Start route %(3 stops%)', '^1%. Alpha', '^2%. Bravo', '^3%. Charlie', 'Fine Longsword']) {
+    assert.equal(vm.evaluate(`FindButton("${label}") ~= nil`), 'true', label);
+  }
+  assert.equal(vm.evaluate('FindButton("^Set waypoint")'), null, 'a route replaces the single waypoint button');
+  // Start: stop 1 is set and the button becomes Next stop.
+  vm.run('Click("Start route")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.1');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('stop 1 of 3: Alpha'));
+  assert.equal(vm.evaluate('FindButton("Next stop %(2/3%)") ~= nil'), 'true');
+  assert.equal(vm.evaluate('FindButton("^> 1%. Alpha") ~= nil'), 'true');
+  // Arriving at stop 1 moves the waypoint to stop 2.
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  // Next stop skips ahead; after the last one the route ends.
+  vm.run('Click("Next stop")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  vm.run('Click("Finish route")');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('route complete'));
+  assert.equal(vm.evaluate('FindButton("Start route") ~= nil'), 'true');
+  // A stop's own button starts the route there.
+  vm.run('Click("^2%. Bravo")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  // Shift-click on an item links it like any item link.
+  vm.run('IsModifiedClick = function(k) return k == "CHATLINK" end; HandleModifiedItemClick = function(link) STUB.linked = link end; Click("Fine Longsword")');
+  assert.equal(vm.evaluate('STUB.linked'), 'item:2140');
+});
+
+test('a stop inside a dungeon is set on the entrance the world map shows, and entering the dungeon reaches it', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.entrances[1420] = { { "Ruins of Lordaeron", 0.62, 0.73 } }
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Route for the Ruins of Lordaeron quests")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Two stops.",
+    waypoints = { { instance = "Ruins of Lordaeron", label = "Captain Truman" }, { mapId = 1453, x = 0.634, y = 0.758, label = "General Marcus Jonathan" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('FindButton("^1%. Captain Truman %(Ruins of Lordaeron entrance%)") ~= nil'), 'true');
+  vm.run('local b = FindButton("Start route"); b.scripts.OnClick(b)');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1420', 'the waypoint is on the zone outside, not the dungeon');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.62');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints]').includes('Captain Truman (Ruins of Lordaeron entrance)'));
+  // Going through the portal reaches the stop; the route moves on.
+  vm.run('STUB.instance = "Ruins of Lordaeron"; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1453');
+  // A dungeon the map doesn't know says so instead of setting nothing silently.
+  vm.run('STUB.instance = nil; WoWClaude.SetWaypoint({ instance = "Hall of Nowhere", label = "x" })');
+  assert.match(vm.evaluate('STUB.prints[#STUB.prints]'), /doesn't show the entrance to Hall of Nowhere/);
+  // The command finds entrances by name, with or without "The".
+  vm.run('SlashCmdList.WOWCLAUDE("entrance the ruins of lordaeron")');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /Ruins of Lordaeron entrance: map 1420 at 62\.0, 73\.0/);
+});
+
+test('stops known only by name: a dungeon the world map knows becomes its entrance, a town is left out', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.entrances[1420] = { { "Ruins of Lordaeron", 0.62, 0.73 } }
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Take me to the Ruins of Lordaeron")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three travel stops.",
+    waypoint = { place = "Tarren Mill", label = "Tarren Mill" },
+    waypoints = { { place = "Tarren Mill", label = "Tarren Mill" }, { place = "Silverpine Forest", label = "Silverpine Forest" }, { place = "Ruins of Lordaeron", label = "Ruins of Lordaeron" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  // One stop is left: no route, a single waypoint on the entrance.
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoints'), null);
+  assert.equal(vm.evaluate('WoWClaudeDB.chats[1].history[2].waypoint.instance'), 'Ruins of Lordaeron');
+  assert.equal(vm.evaluate('FindButton("^Copy /way") ~= nil'), 'true');
+  vm.run('local b = FindButton("^Set waypoint"); b.scripts.OnClick(b)');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1420');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.62');
+});
+
+test('with TomTom, a route puts every stop on the map, the arrow follows the current stop and arrival moves it on', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`STUB.InstallTomTom()
+    -- The player's own waypoint where stop 1 goes: left alone.
+    Mine = TomTom:AddWaypoint(1431, 0.1, 0.5, { title = "1. Alpha", from = "Player" })
+    function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end
+    function Click(pattern) local b = FindButton(pattern); b.scripts.OnClick(b) end
+    function Titles() local t = {} for _, w in ipairs(TomTom.list) do table.insert(t, w.title .. "@" .. w.from) end return table.concat(t, ",") end`);
+  vm.run('WoWClaude.Send("Route please")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Four stops.",
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { mapId = 1431, x = 0.2, y = 0.5, label = "Bravo" },
+      { instance = "Hall of Nowhere", label = "Ghost" }, { mapId = 1431, x = 0.3, y = 0.5, label = "Charlie" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  vm.run('Click("Start route")');
+  // Stop 1 is the player's own; the dungeon stop can't be placed; the rest keep their stop numbers.
+  assert.equal(vm.evaluate('Titles()'), '1. Alpha@Player,2. Bravo@WoWClaude,4. Charlie@WoWClaude');
+  assert.equal(vm.evaluate('TomTom.list[2].cleardistance'), '0', 'TomTom does not clear a stop the route still needs');
+  assert.equal(vm.evaluate('TomTom.list[2].persistent'), 'false');
+  assert.equal(vm.evaluate('TomTom.list[2].crazy'), 'false');
+  // A later stop passed on the way does nothing.
+  vm.run('STUB.TomTomDistance(TomTom.list[3], 20)');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.1');
+  // Arriving at stop 1 by the tick moves on; the arrow now points at Bravo.
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick(); STUB.posX, STUB.posY = nil, nil');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), '2. Bravo');
+  // TomTom's arrival callback for the current stop moves on too; its own ping still runs.
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 12)');
+  assert.equal(vm.num('STUB.tomtomPings'), 1);
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.2', 'inside the ping circle only, not a new arrival');
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 22)');
+  assert.ok(vm.evaluate('STUB.prints[#STUB.prints - 1]').includes('reached Bravo'));
+  // Stop 3 can't be placed; Next stop goes on to Charlie.
+  vm.run('Click("Next stop")');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), '4. Charlie');
+  // A stale callback for a stop already passed does nothing.
+  vm.run('STUB.TomTomDistance(TomTom.list[2], 20)');
+  assert.equal(vm.evaluate('STUB.waypoint.x'), '0.3');
+  // Finishing removes our stops and keeps the player's.
+  vm.run('Click("Finish route")');
+  assert.equal(vm.evaluate('Titles()'), '1. Alpha@Player');
+});
+
+test('with TomTom, a single waypoint gets the arrow and replaces only the previous one of ours', () => {
+  const vm = newVM();
+  login(vm);
+  vm.run(`STUB.InstallTomTom()
+    TomTom:AddWaypoint(1453, 0.5, 0.5, { title = "Bank", from = "Player" })
+    WoWClaude.SetWaypoint({ mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" })`);
+  assert.equal(vm.num('#TomTom.list'), 2);
+  assert.equal(vm.evaluate('TomTom.list[2].from'), 'WoWClaude');
+  assert.equal(vm.evaluate('TomTom.list[2].cleardistance'), null, 'TomTom clears it on arrival as usual');
+  assert.equal(vm.evaluate('TomTom.arrowTitle'), 'Darkshire');
+  assert.equal(vm.evaluate('STUB.waypoint.mapId'), '1431', 'the game waypoint is still set');
+  vm.run('WoWClaude.SetWaypoint({ mapId = 1433, x = 0.3, y = 0.6, label = "Lakeshire" })');
+  assert.equal(vm.num('#TomTom.list'), 2);
+  assert.equal(vm.evaluate('TomTom.list[1].title'), 'Bank');
+  assert.equal(vm.evaluate('TomTom.list[2].title'), 'Lakeshire');
+});
+
+test('the player\'s waypoints become a section: the map pin and their TomTom waypoints, not the guide\'s own', () => {
+  const vm = newVM();
+  vm.run('STUB.InstallTomTom(); TomTom:AddWaypoint(1453, 0.624, 0.718, { title = "Bank", from = "Player" })');
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  assert.equal(stateOnStrip(vm).sections.ways, 'TomTom waypoints (1): Bank (Duskwood 62.4, 71.8)');
+  deliverState(vm);
+  // TomTom sends no events; its add call marks the section.
+  vm.run('TomTom:AddWaypoint(1431, 0.5, 0.25, { title = "Rare spawn", from = "TomTom/way" }); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(stateOnStrip(vm).sections.ways, 'TomTom waypoints (2): Bank (Duskwood 62.4, 71.8); Rare spawn (Duskwood 50.0, 25.0)');
+  deliverState(vm);
+  // The guide's waypoint: the map pin says who set it, and our TomTom copy is left out.
+  vm.run('WoWClaude.SetWaypoint({ mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }); STUB.FireEvent("USER_WAYPOINT_UPDATED"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(vm.num('#TomTom.list'), 3);
+  assert.equal(stateOnStrip(vm).sections.ways,
+    'Map pin: Duskwood 45.2, 67.8 (set by the guide)\nTomTom waypoints (2): Bank (Duskwood 62.4, 71.8); Rare spawn (Duskwood 50.0, 25.0)');
+  deliverState(vm);
+  vm.run('STUB.waypoint = { mapId = 1431, x = 0.1, y = 0.2 }; STUB.FireEvent("USER_WAYPOINT_UPDATED"); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.match(stateOnStrip(vm).sections.ways, /^Map pin: Duskwood 10\.0, 20\.0 \(set by the player\)\n/);
+});
+
+test('a route answer offers its stops as /way lines and announces each stop reached', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run(`function FindButton(pattern)
+      for i = #STUB.frames, 1, -1 do
+        local f = STUB.frames[i]
+        if f.kind == "Button" and f.shown and type(f.text) == "string" and f.text:find(pattern) then return f end
+      end
+    end`);
+  vm.run('WoWClaude.Send("Route please")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "Three stops.",
+    waypoints = { { mapId = 1431, x = 0.1, y = 0.5, label = "Alpha" }, { instance = "Hall of Nowhere", label = "Ghost" }, { mapId = 1453, x = 0.634, y = 0.758, label = "General Marcus Jonathan" } } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  assert.equal(vm.evaluate('FindButton("^Copy /way") ~= nil'), 'true');
+  assert.equal(vm.evaluate('WoWClaude.WayLines(WoWClaudeDB.chats[1].history[2].waypoints)'),
+    '/way #1431 10.0 50.0 Alpha\n/way #1453 63.4 75.8 General Marcus Jonathan', 'a stop the map can\'t place is left out');
+  assert.equal(vm.evaluate('WoWClaude.WayLines({ { mapId = 1431, x = 0.452, y = 0.678 } })'), '/way #1431 45.2 67.8');
+  deliverState(vm);
+  vm.run('local b = FindButton("Start route"); b.scripts.OnClick(b)');
+  deliverState(vm);
+  vm.run('STUB.posX, STUB.posY = 0.101, 0.5; STUB.now = STUB.now + 3; STUB.Tick(); STUB.posX, STUB.posY = nil, nil');
+  assert.deepEqual(announcements(vm).find(a => a.kind === 'route'), { kind: 'route', stop: '1', of: '3', label: 'Alpha', next: 'Ghost', zone: 'Hall of Nowhere' });
+  deliverState(vm);
+  vm.run('local b = FindButton("Next stop"); b.scripts.OnClick(b)');
+  vm.run('STUB.posX, STUB.posY = 0.634, 0.758; STUB.now = STUB.now + 3; STUB.Tick()');
+  assert.deepEqual(announcements(vm).find(a => a.kind === 'route'), { kind: 'route', stop: '3', of: '3', label: 'General Marcus Jonathan', next: '', zone: '' });
+  // Switched off in game: no more route moments.
+  vm.run('SlashCmdList.WOWCLAUDE("announce route off")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=route:0'));
 });
 
 test('/wow-claude bind assigns a window-independent Talk hotkey', () => {
@@ -838,10 +1110,168 @@ test('announcements wait out combat, respect in-game switches, and follow the co
   vm.run('SlashCmdList.WOWCLAUDE("narrate on")');
   assert.ok(stripRecords(vm).some(r => r.flags === 'ann=narrate:1'));
   vm.run('SlashCmdList.WOWCLAUDE("announce all on")');
-  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1'));
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=quest:1,level:1,zone:1,bags:1,narrate:1,route:1,polestar:1'));
   // The companion's settings arrive with the next slot.
   nextSlot(vm, '{ now = time(), cwd = "", replies = {}, announce = { quest = true, level = false, zone = false, bags = false, narrate = false } }');
   vm.run('WoWClaude.Connect(); STUB.now = STUB.now + 6; STUB.Tick()');
   assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.level'), 'false');
   assert.equal(vm.evaluate('WoWClaudeDB.settings.announce.quest'), 'true');
+});
+
+// ---------------------------------------------------------------------------
+// Polestar (PolestarLink.lua), against the fake in wow_stub.lua
+// ---------------------------------------------------------------------------
+
+function polestarVM() {
+  const vm = newVM();
+  vm.run('STUB.InstallPolestar()');
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  return vm;
+}
+
+// Ask something and let the bridge answer with a Polestar command; returns
+// the line the add-on added to the chat.
+function polestarReply(vm, action, arg = '') {
+  vm.run('WoWClaude.Send("a polestar command")');
+  const chatId = vm.evaluate('WoWClaudeDB.chats[1].id');
+  const id = vm.num('WoWClaudeDB.chats[1].pendingId');
+  nextSlot(vm, `{ now = time(), cwd = "", replies = { { chat = "${chatId}", id = ${id}, status = "done", text = "OK.", polestar = { action = "${action}", arg = "${arg}" } } } }`);
+  vm.run('STUB.now = STUB.now + 6; STUB.Tick()');
+  return vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text');
+}
+
+const POLESTAR_SECTION = [
+  'Polestar guide: Durotar 1-6 (step 1 of 40, 4 of 40 steps done)',
+  'Step 1: Valley of Trials',
+  'Now at: Gornek (person 1 of 2)',
+  'To do now: Accept Cutting Teeth',
+  "Then: Foreman Thazz'ril",
+  'Arrow: Accept Cutting Teeth, Durotar 42.6, 67.8',
+  "Rest of the step: Turn in Your Place In The World at Gornek - done; Accept Lazy Peons from Foreman Thazz'ril; Kill Mottled Boar 3/8 for Cutting Teeth; Loot everything, vendor at the den (optional)",
+  'Other Polestar guides open: Mining 1-300 (step 3 of 20)',
+].join('\n');
+
+test('with Polestar, its current step becomes the "polestar" section: who to see, what to do, the arrow in live coordinates', () => {
+  const vm = polestarVM();
+  assert.equal(stateOnStrip(vm).sections.polestar, POLESTAR_SECTION);
+  assert.ok(vm.evaluate('WoWClaude.GameContext()').includes('Now at: Gornek (person 1 of 2)'), '/wow-claude context shows it too');
+});
+
+test('without Polestar there is no section, and commands say it is missing', () => {
+  const vm = newVM();
+  login(vm);
+  connect(vm);
+  vm.run('STUB.RunTimers(); STUB.Tick()');
+  assert.equal(stateOnStrip(vm).sections.polestar, '');
+  deliverState(vm);
+  assert.equal(polestarReply(vm, 'skip'), 'Polestar is not loaded.');
+  vm.run('SlashCmdList.WOWCLAUDE("polestar")');
+  assert.match(vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text'), /^Polestar is not loaded/);
+});
+
+test('Polestar narration: the step at login is only noted, the next person or step is announced, browsing is not', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  assert.equal(announcements(vm).length, 0, 'the step at login is only noted');
+  // Gornek is done: the focus moves to the next person in the same step.
+  vm.run(`local v = STUB.polestar.views[1]; v.goals[2].status = "done"; v.groups[1].done = true; v.focus = 2
+    Polestar.Fire("STEP_UPDATED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  assert.deepEqual(announcements(vm), [{
+    kind: 'pstep', guide: 'Durotar 1-6', step: '1', of: '40', title: 'Valley of Trials', who: "Foreman Thazz'ril",
+    person: '2', persons: '2', now: 'Accept Lazy Peons', then: 'Kill Mottled Boar 3/8 for Cutting Teeth', same: '1',
+  }]);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nNow at: Foreman Thazz'ril \(person 2 of 2\)\nTo do now: Accept Lazy Peons\nThen: Kill Mottled Boar 3\/8 for Cutting Teeth\n/);
+  deliverState(vm);
+  // A kill ticks a counter: same person, nothing to say.
+  vm.run('STUB.polestar.views[1].goals[4].progress.cur = 4; Polestar.Fire("STEP_UPDATED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(announcements(vm).length, 0);
+  deliverState(vm);
+  // Several updates in a row are spoken once, as they end up.
+  vm.run(`STUB.polestar.step, STUB.polestar.live = 2, 2
+    Polestar.Fire("STEP_CHANGED", 2); Polestar.Fire("STEP_UPDATED", 2); Polestar.Fire("WAYPOINT_CHANGED", nil); STUB.now = STUB.now + 2; STUB.RunTimers()`);
+  assert.deepEqual(announcements(vm), [{
+    kind: 'pstep', guide: 'Durotar 1-6', step: '2', of: '40', title: 'Razor Hill', who: "Gar'Thok",
+    person: '1', persons: '1', now: 'Accept Vanquish the Betrayers', then: '', same: '',
+  }]);
+  deliverState(vm);
+  // Looking back at step 1 says nothing; the section says what is shown.
+  vm.run('STUB.polestar.step = 1; Polestar.Fire("STEP_CHANGED", 1); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.equal(announcements(vm).length, 0);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nThe player is looking at step 1; the guide is on step 2\n/);
+});
+
+test('Polestar voice commands: skip, undo, back, current, aim by number or name, switch or open a guide', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  const calls = () => vm.evaluate('table.concat(STUB.polestar.calls, ", ")');
+  assert.equal(polestarReply(vm, 'skip'), 'Polestar skipped step 1. Say "undo skip" to bring it back.');
+  assert.equal(vm.num('STUB.polestar.step'), 2);
+  assert.equal(polestarReply(vm, 'unskip'), 'Step 1 is open again.');
+  assert.equal(vm.num('STUB.polestar.step'), 1);
+  assert.equal(polestarReply(vm, 'unskip'), 'There is no skipped step to bring back in this guide.');
+  vm.run('STUB.polestar.step, STUB.polestar.live = 2, 2');
+  assert.equal(polestarReply(vm, 'back'), 'Polestar shows step 1: Valley of Trials.');
+  assert.equal(polestarReply(vm, 'current'), 'Polestar shows step 2: Razor Hill.');
+  vm.run('STUB.polestar.step, STUB.polestar.live = 1, 1');
+  // Rows as the window shows them, done ones included and the na goal left out: the fourth is the boars.
+  assert.equal(polestarReply(vm, 'aim', 'fourth'), "Polestar's arrow now points at: Kill Mottled Boar 3/8.");
+  assert.equal(polestarReply(vm, 'aim', 'thazz'), "Polestar's arrow now points at: Accept Lazy Peons.");
+  assert.equal(polestarReply(vm, 'aim', 'first'), 'Turn in Your Place In The World: nowhere for the arrow to lead (done, or no place known).');
+  assert.equal(polestarReply(vm, 'aim', 'murlocs'), 'No goal in this step matches "murlocs".');
+  // An open tab is selected; another guide opens in a new tab.
+  assert.equal(polestarReply(vm, 'guide', 'mining'), 'Polestar switched to Mining 1-300.');
+  assert.equal(polestarReply(vm, 'guide', 'barrens'), 'Polestar opened The Barrens 12-20.');
+  assert.equal(polestarReply(vm, 'guide', 'stranglethorn'), 'Polestar has no guide called "stranglethorn".');
+  assert.equal(calls(), 'Skip 1, Unskip 1, Prev, Goto 2, AimGoal 1 4, AimGoal 1 3, AimGoal 1 1, SelectTab 2, OpenTab forever/horde/02-barrens');
+});
+
+test('a Polestar command in combat waits until combat ends', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  vm.run('STUB.combat = true');
+  assert.equal(polestarReply(vm, 'skip'), 'In combat: Polestar will do that when combat ends.');
+  assert.equal(vm.num('STUB.polestar.step'), 1);
+  vm.run('STUB.combat = false; STUB.FireEvent("PLAYER_REGEN_ENABLED")');
+  assert.equal(vm.num('STUB.polestar.step'), 2);
+  assert.equal(vm.evaluate('STUB.prints[#STUB.prints]'), 'WoW Voice Guide: Polestar skipped step 1. Say "undo skip" to bring it back.');
+});
+
+test('Polestar moments: skipped quests, guide done, route choice, trainer due, out-leveled', () => {
+  const vm = polestarVM();
+  deliverState(vm);
+  const fire = code => { vm.run(code + '; STUB.now = STUB.now + 2; STUB.RunTimers()'); const a = announcements(vm); deliverState(vm); return a; };
+  vm.run('Polestar.Fire("STEP_SKIPPED", 1, 2, { { quest = 790, title = "Sarkoth", reason = "closed", text = "No longer offered: you took Sarkoth; part 2" } }); STUB.now = STUB.now + 2; STUB.RunTimers()');
+  assert.deepEqual(announcements(vm), [{ kind: 'pskip', quests: 'Sarkoth (No longer offered: you took Sarkoth, part 2)' }]);
+  assert.match(stateOnStrip(vm).sections.polestar, /\nPolestar skipped: Sarkoth \(No longer offered: you took Sarkoth, part 2\)\n/);
+  deliverState(vm);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_COMPLETED", "forever/horde/orc/01-durotar")'), [{ kind: 'pdone', guide: 'Durotar 1-6' }]);
+  assert.deepEqual(fire(`STUB.polestar.choice = { fromTitle = "Durotar 1-6", options = { { id = "a", title = "The Barrens 12-20", recommended = true }, { id = "b", title = "Silverpine Forest 10-20" } } }
+    Polestar.Fire("ROUTE_CHOICE", "forever/horde/orc/01-durotar")`),
+    [{ kind: 'proute', guide: 'Durotar 1-6', options: 'The Barrens 12-20 (recommended); Silverpine Forest 10-20' }]);
+  assert.deepEqual(fire('Polestar.Fire("TRAIN_DUE", 6, { npc = 3153, npcName = "Frang", map = 1411, x = 42, y = 69 })'), [{ kind: 'ptrain', level: '6', npc: 'Frang', where: 'Durotar' }]);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_OUTLEVELED", "forever/horde/orc/01-durotar", "forever/horde/02-barrens")'),
+    [{ kind: 'plevel', guide: 'Durotar 1-6', next: 'The Barrens 12-20' }]);
+  // Switched off: no more Polestar moments.
+  vm.run('SlashCmdList.WOWCLAUDE("announce polestar off")');
+  assert.ok(stripRecords(vm).some(r => r.flags === 'ann=polestar:0'));
+  deliverState(vm);
+  assert.deepEqual(fire('Polestar.Fire("GUIDE_COMPLETED", "forever/horde/orc/01-durotar")'), []);
+});
+
+test('/wow-claude polestar shows what the guide sees; dump shows the raw step view and keeps it in saved variables', () => {
+  const vm = polestarVM();
+  vm.run('SlashCmdList.WOWCLAUDE("polestar")');
+  const last = () => vm.evaluate('WoWClaudeDB.chats[1].history[#WoWClaudeDB.chats[1].history].text');
+  assert.ok(last().startsWith('What the guide sees of Polestar:\n' + POLESTAR_SECTION));
+  vm.run('SlashCmdList.WOWCLAUDE("polestar dump")');
+  const dump = vm.evaluate('WoWClaudeDB.polestarDump');
+  assert.match(dump, /^-- Polestar \?, guide forever\/horde\/orc\/01-durotar, step 1 \(live 1\)\nview = \{\n/);
+  assert.match(dump, /\n {4}\[4\] = \{\n(?:.*\n)*? {6}progress = \{\n {8}cur = 3,\n {8}kind = "count",\n {8}max = 8,\n {6}\},/);
+  assert.match(dump, /\nwaypoint = \{\n {2}f = "e",\n {2}goalIndex = 2,\n/);
+  assert.match(dump, /\ntabs = \{\n(?:.*\n)*\} -- active 1\n/);
+  assert.ok(dump.endsWith('--[[\n' + POLESTAR_SECTION + '\n]]'));
+  // The dump must be valid Lua (it is pasted back to check Polestar's shapes).
+  vm.run('assert((loadstring or load)((WoWClaudeDB.polestarDump:gsub("%-%-%[%[.*%]%]$", ""))))');
 });

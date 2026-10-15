@@ -30,6 +30,8 @@ const GameState = require('./gamestate');
 const Speech = require('./speech');
 const VoicePresets = require('./voice-presets');
 const Announce = require('./announce');
+const Polestar = require('./polestar');
+const Trainer = require('./trainer');
 
 const HERE = __dirname;
 const CONFIG_FILE = path.join(HERE, 'config.json');
@@ -92,6 +94,8 @@ if (!state.sessions) state.sessions = {};
 // The merged game state sections (bridge/gamestate.js). A context string kept by
 // an older bridge becomes the one legacy section.
 if (!state.game || !state.game.sections) state.game = GameState.newStore();
+// Class trainer prices seen in game, per class: { WARRIOR: { "Revenge|1": 600 } }.
+if (!state.trainerCosts) state.trainerCosts = {};
 if (state.context) {
   if (state.context.text && !Object.keys(state.game.sections).length) GameState.setLegacyContext(state.game, state.context.text, { now: state.context.at || Date.now() });
   delete state.context;
@@ -334,6 +338,7 @@ function applyGameState(job) {
   if (job.state !== undefined) {
     const changed = GameState.applySections(state.game, job.state, opts);
     if (!changed.length) return;
+    if (changed.includes('train')) mergeTrainerCosts(tag);
     saveState();
     log(`${tag} game state: ${changed.join(', ')}${Object.keys(state.game.sections).length ? '' : ' (cleared)'}`);
     return;
@@ -346,9 +351,25 @@ function applyGameState(job) {
   log(`${tag} game context ${text ? 'updated: ' + GameState.summary(state.game) : 'cleared'}`);
 }
 
+// The trainer window's prices (the "train" section) kept for the player's class,
+// so a later level-up can say what its spells cost.
+function mergeTrainerCosts(tag) {
+  const text = GameState.sectionText(state.game, 'train');
+  const token = Trainer.classToken(GameState.playerInfo(state.game).class);
+  if (!text || !token) return;
+  const n = Trainer.mergeCosts(state.trainerCosts[token] = state.trainerCosts[token] || {}, text);
+  if (n) log(`${tag} trainer prices: ${n} new or changed for ${token}`);
+}
+
+const TRAINING_QUESTION = /\b(train(?:er|ing)?|spells?|abilit(?:y|ies)|learn|ranks?)\b/i;
+
 function gameContext(question) {
   if (cfg.gameContext === false) return '';
-  return GameState.assembleContext(state.game, question, { maxChars: cfg.gameContextMaxChars || 3500 });
+  const context = GameState.assembleContext(state.game, question, { maxChars: cfg.gameContextMaxChars || 3500 });
+  if (!TRAINING_QUESTION.test(question || '') || !Trainer.available()) return context;
+  const player = GameState.playerInfo(state.game);
+  const line = Trainer.contextLine(player, GameState.knownSpellIds(state.game), state.trainerCosts[Trainer.classToken(player.class)]);
+  return line ? `${context}\n${line}` : context;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,6 +377,10 @@ function gameContext(question) {
 // ---------------------------------------------------------------------------
 
 function submit(job) {
+  if (job.hello && job.session) {
+    const n = P.rewindHandled(state, job);
+    if (n) log(`#${job.id}@${job.session} hello with a handled id: game counter went back, forgot ${n} handled id(s)`);
+  }
   if (alreadyHandled(job)) return;
   if (job.ctx !== undefined || job.state !== undefined) applyGameState(job);
   if (job.volume !== null && job.volume !== undefined) {
@@ -380,7 +405,7 @@ function submit(job) {
     saveState();
     ack(job.id);
     if (job.announce) {
-      const result = announcer.handle(job.text, { game: cfg.gameContext === false ? null : state.game });
+      const result = announcer.handle(job.text, { game: cfg.gameContext === false ? null : state.game, trainerCosts: state.trainerCosts });
       log(`#${job.id} announcement ${(Announce.fieldsOf(job.text).kind || '?')}: ${result}`);
     } else publishNow();
     return;
@@ -547,8 +572,10 @@ async function runAssistantJob(job, text) {
       input.onSpeech = delta => speaker.push(delta);
       input.onLookup = () => speaker.lookupStarted();
     }
-    // "Read me this quest" is read straight from the quest log, no model call.
-    let answer = readQuestAnswer(job.text);
+    // "Read me this quest" is read straight from the quest log, and Polestar
+    // commands ("skip this step", "read me the step") are answered here: no model call.
+    let answer = readQuestAnswer(job.text) || Polestar.answer(job.text, cfg.gameContext === false ? null : state.game);
+    if (answer && answer.polestar) log(`${tag} polestar command: ${answer.polestar.action}${answer.polestar.arg ? ` "${answer.polestar.arg}"` : ''}`);
     if (!answer) {
       try { answer = await Providers.requestGuideAnswer(cfg, input); }
       catch (e) { if (speaker) speaker.cancel(); throw e; }
@@ -560,6 +587,9 @@ async function runAssistantJob(job, text) {
     finish(job, 'done', answer.display, '', [], {
       transcript: job.transcript,
       waypoint: answer.waypoint,
+      waypoints: answer.waypoints,
+      items: answer.items,
+      polestar: answer.polestar,
       speechEndsAt: speaker ? Speech.estimatedSpeechEnd(answer.speech, speaker) : null,
     });
     if (!speech) {

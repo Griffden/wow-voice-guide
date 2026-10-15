@@ -107,8 +107,12 @@ Short spoken notes in the selected Fish voice, each switched on separately and *
 | `announce.zone` | `false` | "Welcome to Westfall. There are 12 quests you can pick up in Westfall. Nearest: ..." |
 | `announce.bags` | `false` | "Your bags are almost full: 1 free slot left." at 2 or fewer free slots; a repair warning when an item drops to 20 % durability |
 | `announce.narrate` | `false` | Reads a newly accepted quest's title, text and objectives aloud |
+| `announce.route` | `false` | "Reached Earthseer Farsen. Next, Thom Filch in Stormwind City." as a route answer's stops are reached |
+| `announce.polestar` | `false` | With the [Polestar](https://www.curseforge.com/wow/addons/polestar-guides) guide add-on: each step or person as you reach it ("Step 2 of 40, Razor Hill. At Gar'Thok: accept Vanquish the Betrayers."), quests Polestar skipped, a finished guide, the next-zone choice, class training due and an out-leveled guide |
 
-Never during combat: the add-on holds moments until combat ends and drops them after a minute. Zone briefings are spoken at most every 90 seconds, bag and repair warnings at most every 5 minutes, and announcements wait while the guide is answering. Saying "read me this quest" reads the selected or tracked quest whether or not narration is on.
+Never during combat: the add-on holds moments until combat ends and drops them after a minute. Zone briefings are spoken at most every 90 seconds, bag and repair warnings at most every 5 minutes, and announcements wait while the guide is answering. Saying "read me this quest" reads the selected or tracked quest whether or not narration is on, and with Polestar, "read me the step" reads its current step.
+
+With Polestar, a few spoken commands drive it instead of going to the model: "skip this step", "undo skip", "go back a step", "show me the next step", "back to the current step", "point me at the second goal" (or a goal's name), and "switch to the mining guide" (an open guide's tab, else the guide opened in a new tab). They act only when the whole sentence is the command, so "should I skip this step?" is still a question for the guide. A command said in combat waits until combat ends.
 
 ### Playback volume
 

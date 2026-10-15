@@ -142,6 +142,20 @@ test('handled ids are tracked per session token and capped', () => {
   assert.equal(P.alreadyHandled(state, { session: '', id: 5000 }), false);
 });
 
+test('a hello with a handled id rewinds the session after the game lost its saved counter', () => {
+  const state = { lastId: 0, handled: {}, sessions: {} };
+  for (let i = 1; i <= 20; i++) P.markHandled(state, { session: 's1', id: i });
+  P.markHandled(state, { session: 's2', id: 15 });
+  // Game crashed after saving at 12: it now sends 13 again.
+  assert.equal(P.rewindHandled(state, { session: 's1', id: 13, hello: true }), 8);
+  assert.equal(P.alreadyHandled(state, { session: 's1', id: 12 }), true);
+  assert.equal(P.alreadyHandled(state, { session: 's1', id: 13 }), false);
+  assert.equal(P.alreadyHandled(state, { session: 's1', id: 20 }), false);
+  assert.equal(P.alreadyHandled(state, { session: 's2', id: 15 }), true);
+  // A fresh id is left alone.
+  assert.equal(P.rewindHandled(state, { session: 's1', id: 30, hello: true }), 0);
+});
+
 test('pruneStale forgets session tokens not seen for a month', () => {
   const day = 24 * 3600 * 1000;
   const now = 100 * day;
@@ -174,4 +188,17 @@ test('luaTable includes a voice transcript and validated waypoint fields', () =>
   assert.ok(lua.includes('transcript = "question"'));
   assert.ok(lua.includes('speechEndsAt = 12345'));
   assert.ok(lua.includes('waypoint = { mapId = 1431, x = 0.452, y = 0.678, label = "Darkshire" }'));
+});
+
+test('luaTable carries a route\'s stops in order and the items an answer names', () => {
+  const lua = P.luaTable('Inbox', [{
+    chat: 'c', id: 4, status: 'done', text: 'route',
+    waypoints: [{ mapId: 1426, x: 0.648, y: 0.584, label: 'Earthseer Farsen' }, { mapId: 1455, x: 0.326, y: 0.446, label: 'Thom "Filch"' }],
+    items: [{ id: 190501, name: 'Golemheart Stave' }],
+  }], { now: 1 });
+  assert.ok(lua.includes('waypoints = { { mapId = 1426, x = 0.648, y = 0.584, label = "Earthseer Farsen" }, { mapId = 1455, x = 0.326, y = 0.446, label = "Thom \\"Filch\\"" } },'));
+  assert.ok(lua.includes('items = { { id = 190501, name = "Golemheart Stave" } },'));
+  const inside = P.luaTable('Inbox', [{ chat: 'c', id: 5, status: 'done', text: 'x',
+    waypoints: [{ instance: 'Ruins of Lordaeron', label: 'Captain Truman' }, { mapId: 1453, x: 0.5, y: 0.5, label: 'A' }] }], { now: 1 });
+  assert.ok(inside.includes('waypoints = { { instance = "Ruins of Lordaeron", label = "Captain Truman" }, { mapId = 1453'));
 });

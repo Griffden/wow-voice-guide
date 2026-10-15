@@ -13,15 +13,18 @@ This is an MIT-licensed fork of [chelinho139/wow-claude](https://github.com/chel
 | Hands-free questions | Press the in-game **Talk** button, `/voice`, or a keybind; Deepgram Flux detects when you finish talking. The companion's **Finish now** and **Cancel listening** buttons are fallbacks. |
 | Spoken character voices | Hear replies through Fish Audio, streamed: speech starts on the answer's first sentence while the rest is still being written, and a short "Let me check that." covers a slow lookup. Both can be turned off in companion Settings. Pick Peon, Furbolg, or Knight in the companion, or paste any other Fish Voice Library model ID. Set voice volume from the in-game slider or `/wow-claude volume 0-200`. |
 | Talking portrait | Minimize the in-game window to its top bar. The Peon voice shows the animated orc portrait; the Warcraft 3 Knight voice shows the animated Knight portrait based on the supplied image. Other voices show a neutral guide icon. The portraits move during spoken replies and return to their resting frame afterward. If the client cannot read the live audio signal, the add-on estimates speaking time from the reply. Click the bar to reopen the full window. |
-| Character-aware answers | Ask about your character, level, zone, map position, money, XP and rested XP, hearthstone, talents (read through the Forever client's `C_Traits` talent API), professions, equipped gear and item levels, low durability, bag space, and the flight paths you know (read whenever you open a flight map). The add-on pushes each of these as it changes, so the guide always has the latest state. View or disable what is shared with `/wow-claude context`. |
+| Character-aware answers | Ask about your character, level, zone, map position, money, XP and rested XP, hearthstone, talents (read through the Forever client's `C_Traits` talent API), professions, equipped gear and item levels, low durability, bag space, the flight paths you know (read whenever you open a flight map), and your waypoints (the map pin and, with TomTom, your own TomTom waypoints, so "what's this waypoint I set?" works). The add-on pushes each of these as it changes, so the guide always has the latest state. View or disable what is shared with `/wow-claude context`. |
 | Quest help | The add-on sends every quest in your log with its objective progress and whether it is ready to turn in, plus the full text, next step and turn-in text of the selected or tracked quest, and the quests you have completed. Ask where to go, what an objective means, or what to do next. |
 | NPC and target awareness | When you talk to an NPC, the guide sees what they said and which quests they offer or accept (with quest IDs), so "what is he asking me to do?" works. It also knows your current target's name, level, elite/rare status, creature type and whether it is hostile. It never reads health, auras or cooldowns. |
 | Forever game data | Quests in your log that you mention (or your selected quest, when you ask "where do I go?") are looked up in the Wowhead WoW: Forever database before the guide answers: objectives, turn-in NPC, and quest text. With an OpenAI key and preset, the guide can also search that database itself (quests, NPCs with map coordinates, items, spells, zones) and the live web, choosing which lookups a question needs. Answers show their sources in game and as clickable buttons in the companion. |
 | Quests near you | Ask "what should I do?" or "any quests around here?" and the guide lists the quests you can pick up on your map, nearest quest giver first, from an offline WoW: Forever quest database converted from [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) (MIT). It filters by level, faction, race, class, the quests you have completed or already carry, and prerequisites. "Who gives X?" returns the giver and coordinates, which can become a waypoint. Works with every brain preset, offline. |
-| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (with the new spells at your trainer), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, and reading newly accepted quests aloud in your Fish voice. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
-| Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, while answers based on Classic information or general WoW knowledge start with a short spoken label. |
+| Class training | Ask "what should I train?" and the guide knows which class spells you can learn now and which come next, from the Forever client's own spell tables, checked against your spellbook. Prices come from the trainer window: open your class trainer once and the companion remembers them. Offline, every brain preset. |
+| Spoken announcements (opt-in) | Switch on any of: "quest objectives complete" (with where to turn in), level up (the spells your class trainer now has for you, what they cost once you have visited the trainer, and any you skipped at earlier levels), a one-sentence briefing when you enter a new zone, bags nearly full or gear about to break, reading newly accepted quests aloud in your Fish voice, and each route stop reached with where to go next. All are off by default, rate limited, never spoken during combat, and informational only. Say "read me this quest" any time to hear the selected quest. |
+| Labeled answers | The guide answers instead of refusing and says what an answer rests on: Forever data needs no caveat, and neither does Warcraft lore (story, history, characters), which every edition shares, while gameplay answers based on Classic information or general WoW knowledge start with a short spoken label. |
 | Item, spell, and quest details | Focus the guide input and shift-click an in-game link; its name and tooltip are attached to your question. This is the precise way to ask “What is this?” about an item or quest. |
-| Optional waypoints | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. You choose whether to set it; the guide does not move your character. |
+| Optional waypoints and routes | When an answer contains a valid, grounded map ID and coordinates, a **Set waypoint** button appears. An answer that sends you to several places lists them as numbered steps, each with its zone and area ("Dun Morogh, east of Kharanos") and coordinates when a lookup confirmed them, and shows **Start route** plus a button per stop. The game holds one waypoint at a time, so the route moves it to the next stop when you arrive (or when you click **Next stop**); with [TomTom](https://www.curseforge.com/wow/addons/tomtom) installed every stop is also put on the map, its arrow points at the current stop, and a single-waypoint answer gets the arrow too. Your own TomTom waypoints are never touched. **Copy /way** under a waypoint answer gives its stops as `/way #map x y label` lines to paste or share. You choose whether to set any of it; the guide does not move your character. |
+| Polestar leveling guide | With [Polestar](https://www.curseforge.com/wow/addons/polestar-guides) installed, the voice guide follows its route: it knows the step you are on, who to talk to now and what to do there, where Polestar's arrow points and which quests Polestar skipped, so "what's next?" and "why am I going here?" are answered from your Polestar step. Switch on the `polestar` announcement and it reads each step aloud as you reach it ("Next, Foreman Thazz'ril: accept Lazy Peons."), plus skipped quests, the end of a guide, the next-zone choice, class training reminders and out-leveled guides. Drive Polestar by voice: "read me the step", "skip this step", "undo skip", "go back a step", "back to the current step", "point me at the second goal", "switch to the mining guide". `/wow-claude polestar` shows what the guide sees. Only Polestar's public functions are used; its saved data is never touched. |
+| Item buttons | Items an answer names that the Wowhead lookup found get a button with their icon: hover for the real in-game tooltip, click to pin it, shift-click to link it in chat, ctrl-click to try it on. |
 | In-game chat and follow-ups | Type in the window or use `/ai <question>` from the game chat box. Replies can be echoed into game chat, and multiple conversations, transcript recovery, copyable answers, and a minimizable status bar are retained from the original add-on. |
 
 Try:
@@ -31,6 +34,7 @@ Try:
 - While talking to an NPC: “Which of these quests should I take?”
 - “Where is Cerellean Whiteclaw?” (answers with coordinates and a **Set waypoint** button)
 - “What talents do I have?” or “Read me this quest.”
+- With Polestar: “Read me the step”, “Skip this step”, or “Why does Polestar send me to the Barrens now?”
 
 For a specific item or quest, shift-click its link into the guide input before asking.
 
@@ -144,7 +148,7 @@ Typed chat remains available as a fallback. Fish only speaks voice-originated qu
 | `/wow-claude bind F8` | Bind the Talk action to a key; substitute your preferred key. |
 | `/wow-claude context` | Show exactly what game context is shared; append `on` or `off` to change it. |
 | `/wow-claude volume 150` | Set spoken-reply volume (0–200). |
-| `/wow-claude announce zone on` | Switch a spoken announcement on or off: `quest`, `level`, `zone`, `bags`, or `all`. No argument lists them. Also in companion Settings. |
+| `/wow-claude announce zone on` | Switch a spoken announcement on or off: `quest`, `level`, `zone`, `bags`, `route`, or `all`. No argument lists them. Also in companion Settings. |
 | `/wow-claude narrate on` | Read newly accepted quests aloud in the guide voice. |
 | `/wow-claude size reset` | Restore the default window size and center it (or right-click the window's resize grip). |
 | `/wow-claude new`, `chat`, `clear`, `copy` | Manage conversations and copy the last answer. |
@@ -198,6 +202,7 @@ The suite parses the real Lua and runs the add-on in a Lua VM against a stub of 
 
 - the game-state sections the add-on pushes, and how the companion merges them
 - the quest database's availability filters
+- the class trainer data: what a level-up announces, talent and race rules, trainer prices
 - the guide's lookup loop and answer labels
 - streamed speech over a mocked Fish WebSocket
 - announcement rate limits and combat hold
@@ -205,13 +210,15 @@ The suite parses the real Lua and runs the add-on in a Lua VM against a stub of 
 
 No real provider is called. A real-service smoke test still needs personal provider keys and a running Forever client.
 
-To rebuild the offline quest database from the latest AllTheThings data, run `npm run build:quests`.
+To rebuild the offline quest database from the latest AllTheThings data, run `npm run build:quests`. To rebuild the class trainer data from the Forever client tables, run `npm run build:trainer`.
 
 ## Data sources and credits
 
 - **Offline quest database:** converted from the [AllTheThings](https://github.com/ATTWoWAddon/AllTheThings) WoW: Forever data (MIT license; notice kept in [bridge/data/README.md](bridge/data/README.md)).
 - **Quest, NPC, item, and spell lookups:** Wowhead's public WoW: Forever tooltip and search data. Wowhead has no official API, so results are cached and requests kept small.
 - **Zone-to-map table:** generated from the Forever client's map tables on [wago.tools](https://wago.tools).
+- **Class trainer spells:** generated from the Forever client's spell tables on [wago.tools](https://wago.tools) (see [bridge/data/README.md](bridge/data/README.md)). Training costs are read from the trainer window in game.
+- **Polestar support:** built on the public add-on interface documented in [fitzforge/polestar](https://github.com/fitzforge/polestar) (`docs/ARCHITECTURE.md`); Polestar itself is a separate add-on you install from CurseForge.
 - **Forever add-on API reference:** checked against the capture in [forever-addon-kit](https://github.com/Thunderz96/forever-addon-kit).
 
 ## Current delivery status

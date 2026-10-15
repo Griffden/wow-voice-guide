@@ -20,6 +20,7 @@
 --   prof     professions and skill ranks               skill changes
 --   taxi     known flight paths                        opening a flight map
 --   gear     equipped items, durability, bag space     equipment/bag changes
+--   polestar Polestar's guide step (PolestarLink.lua)  Polestar's messages
 --   done.N   completed quest ids, compressed           once per session, then
 --   done.new quests turned in since then               QUEST_TURNED_IN
 --
@@ -30,11 +31,20 @@
 WoWClaude_State = {}
 local S = WoWClaude_State
 
+-- In instances and combat the client hands back "secret" values (names,
+-- levels, GUIDs...) that throw when compared, measured or pattern-matched.
+-- Try turns them into nil, so a secret reads as "not available".
+local IsSecret = type(issecretvalue) == "function" and issecretvalue or function() return false end
+local function Open(v)
+	if v ~= nil and IsSecret(v) then return nil end
+	return v
+end
+
 -- Call a game API that may not exist or may throw, and get its returns or nothing.
 local function Try(fn, ...)
 	if type(fn) ~= "function" then return nil end
 	local ok, a, b, c, d, e, f, g, h, i, j = pcall(fn, ...)
-	if ok then return a, b, c, d, e, f, g, h, i, j end
+	if ok then return Open(a), Open(b), Open(c), Open(d), Open(e), Open(f), Open(g), Open(h), Open(i), Open(j) end
 end
 S.Try = Try
 
@@ -68,9 +78,10 @@ S.Fit = Fit
 -- so a section never needs more than one state record.
 S.BUDGET = {
 	char = 400, prog = 200, loc = 250, quest = 1100, quests = 1200, npc = 1000,
-	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900,
+	target = 200, talents = 600, prof = 250, taxi = 800, gear = 900, ways = 400,
+	train = 1400,
 }
-S.ORDER = { "char", "prog", "loc", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
+S.ORDER = { "char", "prog", "loc", "ways", "polestar", "target", "npc", "quest", "quests", "talents", "prof", "gear", "taxi" }
 
 local function Money(copper)
 	copper = tonumber(copper) or 0
@@ -607,6 +618,50 @@ function S.Taxi(known)
 end
 
 ---------------------------------------------------------------------------
+-- Waypoints: the game's map pin and the player's TomTom waypoints
+---------------------------------------------------------------------------
+
+local function MapName(mapId)
+	local info = Try(C_Map and C_Map.GetMapInfo, mapId)
+	return type(info) == "table" and type(info.name) == "string" and info.name or ("map " .. tostring(mapId))
+end
+
+local function Spot(mapId, x, y)
+	return string.format("%s %.1f, %.1f", MapName(mapId), x * 100, y * 100)
+end
+
+-- ours: the tag on TomTom waypoints the add-on added (left out; the guide
+-- knows its own answers). guidePin: the last map pin the guide set, so the
+-- player can tell it from one they placed.
+function S.Waypoints(ours, guidePin)
+	local lines = {}
+	local pin = Try(C_Map and C_Map.GetUserWaypoint)
+	if type(pin) == "table" and type(pin.uiMapID) == "number" and type(pin.position) == "table"
+		and type(pin.position.x) == "number" and type(pin.position.y) == "number" then
+		local p = pin.position
+		local fromGuide = type(guidePin) == "table" and guidePin.mapId == pin.uiMapID
+			and math.abs((guidePin.x or -1) - p.x) < 0.001 and math.abs((guidePin.y or -1) - p.y) < 0.001
+		table.insert(lines, "Map pin: " .. Spot(pin.uiMapID, p.x, p.y) .. (fromGuide and " (set by the guide)" or " (set by the player)"))
+	end
+	local all = type(TomTom) == "table" and type(TomTom.waypoints) == "table" and TomTom.waypoints
+	local list = {}
+	for mapId, byKey in pairs(all or {}) do
+		if type(byKey) == "table" then
+			for _, w in pairs(byKey) do
+				if type(w) == "table" and w.from ~= ours and type(w[2]) == "number" and type(w[3]) == "number" then
+					local m = type(w[1]) == "number" and w[1] or mapId
+					local title = type(w.title) == "string" and w.title ~= "" and Clean(w.title, 50) or "untitled"
+					table.insert(list, title .. " (" .. Spot(m, w[2], w[3]) .. ")")
+				end
+			end
+		end
+	end
+	table.sort(list)
+	if #list > 0 then table.insert(lines, Clean("TomTom waypoints (" .. #list .. "): " .. table.concat(list, "; "), S.BUDGET.ways)) end
+	return Fit(lines, S.BUDGET.ways)
+end
+
+---------------------------------------------------------------------------
 -- Gear, durability and bag space
 ---------------------------------------------------------------------------
 
@@ -682,6 +737,67 @@ function S.LowestDurability()
 		end
 	end
 	return lowest, where
+end
+
+---------------------------------------------------------------------------
+-- Class training: the spellbook, and a trainer's list while its window is open
+---------------------------------------------------------------------------
+
+-- Spell ids in the player's spellbook, "future" (not yet learned) entries left
+-- out. The bridge compares them with its trainer data (bridge/trainer.js).
+function S.KnownSpells()
+	local ids = {}
+	local book = C_SpellBook
+	if book and type(book.GetNumSpellBookSkillLines) == "function" then
+		local bank = Enum and Enum.SpellBookSpellBank and Enum.SpellBookSpellBank.Player or 0
+		local spellType = Enum and Enum.SpellBookItemType and Enum.SpellBookItemType.Spell or 1
+		for line = 1, Try(book.GetNumSpellBookSkillLines) or 0 do
+			local info = Try(book.GetSpellBookSkillLineInfo, line)
+			if type(info) == "table" and type(info.itemIndexOffset) == "number" and type(info.numSpellBookItems) == "number" then
+				for i = info.itemIndexOffset + 1, info.itemIndexOffset + info.numSpellBookItems do
+					local item = Try(book.GetSpellBookItemInfo, i, bank)
+					if type(item) == "table" and item.itemType == spellType and type(item.spellID) == "number" then table.insert(ids, item.spellID) end
+				end
+			end
+		end
+	elseif type(GetNumSpellTabs) == "function" then
+		for tab = 1, Try(GetNumSpellTabs) or 0 do
+			local _, _, offset, count = Try(GetSpellTabInfo, tab)
+			if type(offset) == "number" and type(count) == "number" then
+				for slot = offset + 1, offset + count do
+					local kind, id = Try(GetSpellBookItemInfo, slot, BOOKTYPE_SPELL or "spell")
+					if kind == "SPELL" and type(id) == "number" then table.insert(ids, id) end
+				end
+			end
+		end
+	end
+	return ids
+end
+
+-- What an open class trainer still has for the player: "Name|rank|copper"
+-- joined by ";", the cheapest levels first as listed. nil for a profession
+-- trainer or an empty list. The client tables have no prices; this is where
+-- the bridge learns them.
+function S.TrainerServices()
+	if Try(IsTradeskillTrainer) then return nil end
+	local n = Try(GetNumTrainerServices)
+	if type(n) ~= "number" or n == 0 then return nil end
+	local items, used = {}, 0
+	for i = 1, math.min(n, 200) do
+		local name, sub, kind = Try(GetTrainerServiceInfo, i)
+		if type(name) == "string" and name ~= "" and (kind == "available" or kind == "unavailable") then
+			local cost = Try(GetTrainerServiceCost, i)
+			if type(cost) == "number" then
+				local rank = tonumber(tostring(sub or ""):match("(%d+)")) or 0
+				local item = (Clean(name, 40):gsub("[|;]", " ")) .. "|" .. rank .. "|" .. math.floor(cost)
+				if used + #item + 1 > S.BUDGET.train then break end
+				table.insert(items, item)
+				used = used + #item + 1
+			end
+		end
+	end
+	if #items == 0 then return nil end
+	return table.concat(items, ";")
 end
 
 -- Names of the spells that become available at this level (to learn at the trainer).

@@ -42,6 +42,20 @@ function markHandled(state, job, now = Date.now()) {
   (state.seen = state.seen || {})[key] = now;
 }
 
+// The game only writes its saved data on logout or reload, so a crash or a
+// killed client restarts the counter from an older value under the same session
+// token. Those ids look handled and would be dropped without an ack, leaving the
+// addon stuck on "Connecting". A hello is safe to act on twice, so a handled id
+// arriving as a hello means the counter went back: forget that id and every
+// later one for the session. Returns how many ids were forgotten.
+function rewindHandled(state, job) {
+  const h = state.handled[job.session || ''];
+  if (!h || !h[job.id]) return 0;
+  let n = 0;
+  for (const k of Object.keys(h)) if (Number(k) >= job.id) { delete h[k]; n++; }
+  return n;
+}
+
 // Every saved-data reset in the game mints a new session token; forget the ones
 // not heard from in a month so state.json and transcripts.json stop growing.
 const MONTH_MS = 30 * 24 * 3600 * 1000;
@@ -105,7 +119,7 @@ function parseFlags(flags) {
     else if (tok.startsWith('ann=')) {
       for (const pair of tok.slice(4).split(',')) {
         const [kind, on] = pair.split(':');
-        if (/^(quest|level|zone|bags|narrate)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
+        if (/^(quest|level|zone|bags|narrate|route|polestar)$/.test(kind) && (on === '1' || on === '0')) announceSet[kind] = on === '1';
       }
     }
     else if (tok === 'v') out.voice = true;
@@ -268,8 +282,22 @@ function luaTable(globalName, records, opts = {}) {
     lines.push(`\t\t\tsession = ${luaStr(r.session || '')},`);
     if (r.transcript) lines.push(`\t\t\ttranscript = ${luaStr(r.transcript)},`);
     if (Number.isFinite(r.speechEndsAt) && r.speechEndsAt > 0) lines.push(`\t\t\tspeechEndsAt = ${r.speechEndsAt},`);
-    if (r.waypoint) {
-      lines.push(`\t\t\twaypoint = { mapId = ${Number(r.waypoint.mapId) || 0}, x = ${Number(r.waypoint.x) || 0}, y = ${Number(r.waypoint.y) || 0}, label = ${luaStr(r.waypoint.label || '')} },`);
+    // A stop inside a dungeon carries its name; the add-on finds the entrance.
+    // A place is a stop known only by name: the add-on keeps it if the world
+    // map knows a dungeon of that name.
+    const point = p => p.instance
+      ? `{ instance = ${luaStr(p.instance)}, label = ${luaStr(p.label || '')} }`
+      : p.place ? `{ place = ${luaStr(p.place)}, label = ${luaStr(p.label || '')} }`
+      : `{ mapId = ${Number(p.mapId) || 0}, x = ${Number(p.x) || 0}, y = ${Number(p.y) || 0}, label = ${luaStr(p.label || '')} }`;
+    if (r.waypoint) lines.push(`\t\t\twaypoint = ${point(r.waypoint)},`);
+    // A route: its stops in order (the add-on shows a button per stop).
+    if (Array.isArray(r.waypoints) && r.waypoints.length) lines.push(`\t\t\twaypoints = { ${r.waypoints.map(point).join(', ')} },`);
+    // A Polestar voice command (bridge/polestar.js): the add-on asks Polestar to do it.
+    if (r.polestar && /^(skip|unskip|back|ahead|current|aim|guide)$/.test(r.polestar.action)) {
+      lines.push(`			polestar = { action = ${luaStr(r.polestar.action)}, arg = ${luaStr(r.polestar.arg || '')} },`);
+    }
+    if (Array.isArray(r.items) && r.items.length) {
+      lines.push(`\t\t\titems = { ${r.items.map(i => `{ id = ${Number(i.id) || 0}, name = ${luaStr(i.name || '')} }`).join(', ')} },`);
     }
     if (Array.isArray(r.denied) && r.denied.length) {
       lines.push(`\t\t\tdenied = { ${r.denied.map(luaStr).join(', ')} },`);
@@ -307,7 +335,7 @@ const SILENT_WAV = (() => {
 
 module.exports = {
   fromHex, pad3, slotNumber, chatKey, sessKey,
-  alreadyHandled, markHandled, pruneStale, MONTH_MS,
+  alreadyHandled, markHandled, rewindHandled, pruneStale, MONTH_MS,
   resolveCwd, sameFolder,
   parseFlags, jobsFromStrip, parseOutbox, systemPrompt,
   ruleFor, describeToolUse,
